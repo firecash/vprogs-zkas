@@ -9,7 +9,11 @@
 //! follow-up so this CLI need not depend on the test-suite.
 
 use clap::{Parser, Subcommand};
-use kaspa_consensus_core::{config::params::MAINNET_PARAMS, constants::TX_VERSION_TOCCATA, subnets::SUBNETWORK_ID_NATIVE};
+use kaspa_consensus_core::{
+    config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS},
+    constants::TX_VERSION_TOCCATA,
+    subnets::SUBNETWORK_ID_NATIVE,
+};
 use kaspa_grpc_client::GrpcClient;
 use kaspa_rpc_core::{api::rpc::RpcApi, notify::mode::NotificationMode};
 use vprogs_l1_wallet::Wallet;
@@ -22,6 +26,10 @@ struct Cli {
     /// gRPC address of an L1 node.
     #[arg(long, default_value = "127.0.0.1:16110")]
     node: String,
+    /// L1 network (selects consensus params and the address HRP; must match the node). The rollup
+    /// L1 is transparent, so use testnet/simnet (shielded mainnet has no spendable UTXOs).
+    #[arg(long, default_value = "testnet")]
+    network: String,
     /// Secret scalar of the L1 key that funds and pays for the carrier transaction.
     #[arg(long)]
     fund_scalar: u64,
@@ -88,7 +96,7 @@ async fn main() {
     // Fund from the L1 key's UTXOs, then submit.
     let fund = RuntimeSigner::from_scalar(cli.fund_scalar);
     let client = connect(&cli.node).await;
-    let wallet = Wallet::new(&client, &MAINNET_PARAMS, fund.secp_keypair());
+    let wallet = Wallet::new(&client, params_for(&cli.network), fund.secp_keypair());
     let tx = build_funded(&wallet, &carrier).await;
     match wallet.submit_transaction(&tx).await {
         Ok(id) => println!("submitted {id}"),
@@ -105,6 +113,17 @@ async fn build_funded<C: RpcApi + ?Sized>(
     wallet
         .build_signed_carrier(carrier.extra_outputs().to_vec(), SUBNETWORK_ID_NATIVE, TX_VERSION_TOCCATA, |rest| carrier.payload(rest))
         .await
+}
+
+/// Selects consensus params (and hence the address HRP) for a network name.
+fn params_for(network: &str) -> &'static Params {
+    match network {
+        "mainnet" => &MAINNET_PARAMS,
+        "testnet" => &TESTNET_PARAMS,
+        "simnet" => &SIMNET_PARAMS,
+        "devnet" => &DEVNET_PARAMS,
+        other => fatal(&format!("unknown network '{other}' (mainnet|testnet|simnet|devnet)")),
+    }
 }
 
 /// Connects a direct-mode gRPC client to `address`.
