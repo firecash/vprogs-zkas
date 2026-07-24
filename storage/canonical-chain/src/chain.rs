@@ -111,11 +111,32 @@ impl CanonicalChain {
         let cur = self.current.load();
         debug_assert!(id > cur.tip, "append id {id} must extend tip {}", cur.tip);
 
-        // Append - advance hot zone, reuse shared ring and set tail bit in place, no copy.
         let (bucket, bit) = Bucket::locate(id);
-        let body = Arc::clone(&cur.body);
-        let hot_zone = cur.hot_zone.roll_forward(bucket, &body);
-        hot_zone.tail.set(bit);
+
+        // A reorg lowers `tip` without shrinking the hot zone, so a replacement block can re-append
+        // into a bucket at or below `tail_bucket`. Only a genuine extension past the tail advances
+        // the hot zone (`roll_forward` is forward-only); otherwise set the bit in the bucket that
+        // already holds it, mirroring `rollback`'s dispatch. A re-append into the sealed body forks
+        // it copy-on-write so the previous snapshot is untouched.
+        let (hot_zone, body) = if bucket > cur.hot_zone.tail_bucket {
+            let body = Arc::clone(&cur.body);
+            let hot_zone = cur.hot_zone.roll_forward(bucket, &body);
+            hot_zone.tail.set(bit);
+            (hot_zone, body)
+        } else if bucket == cur.hot_zone.tail_bucket {
+            cur.hot_zone.tail.set(bit);
+            (cur.hot_zone.clone(), Arc::clone(&cur.body))
+        } else if cur.hot_zone.tail_bucket >= 1 && bucket == cur.hot_zone.tail_bucket - 1 {
+            let mut hot_zone = cur.hot_zone.clone();
+            hot_zone.last_sealed = hot_zone.last_sealed.edited(&[(bit, true)]);
+            (hot_zone, Arc::clone(&cur.body))
+        } else {
+            let body = Arc::new(cur.body.fork());
+            if let Some(sealed) = body.get(bucket) {
+                body.replace(bucket, sealed.edited(&[(bit, true)]));
+            }
+            (cur.hot_zone.clone(), body)
+        };
 
         // Publish the extended snapshot.
         self.current.store(Arc::new(CanonicalChainSnapshot { tip: id, hot_zone, body }));

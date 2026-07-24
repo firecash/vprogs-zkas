@@ -9161,9 +9161,11 @@ dependencies = [
 name = "vprogs-zk-abi"
 version = "0.1.0"
 dependencies = [
+ "blake2b_simd",
  "borsh",
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-merkle",
  "kaspa-rpc-core",
  "kaspa-seq-commit",
  "kaspa-smt",

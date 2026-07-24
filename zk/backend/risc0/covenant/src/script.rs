@@ -560,21 +560,26 @@ fn verify_output_spk(b: &mut ScriptBuilder) {
 /// `batch_image_id` (→ 256B), the 32-byte permission commitment (→ 288B) via
 /// `verify_outputs_and_append_perm_hash`, the 32-byte witnessed `deposit_spk_hash` (→ 320B) via
 /// `verify_and_append_deposit_hash`, recovers the bottom-of-alt `lane_key` and appends it
-/// (→ 352B), then SHA-256s the result.
+/// (→ 352B), appends the gated canonical-`R` `seq_commit` via
+/// `verify_and_append_canonical_seq_commit` (→ 384B), then SHA-256s the result.
 ///
 /// Alt layout going in (top→bottom):
 /// `[new_lane_tip, new_state, new_seq_commit, prev_lane_tip, prev_state, lane_key]`
 ///
-/// The witnessed `deposit_spk_hash` sits on the main stack just above the ZK witness blob
-/// (pushed by the sig_script between the proof bytes and `new_lane_tip`, so the journal-prefix
-/// builders that consumed everything above it have peeled away), i.e. directly under the growing
-/// preimage that the appends below leave on top. `verify_and_append_deposit_hash` lifts it out from
-/// there, binds it, and cats it. After the SHA-256 only `[..zk_witness.., journal_hash]` remains,
-/// exactly the stack the `verify_risc0_*` terminator expects.
+/// The witnessed `deposit_spk_hash` and `canonical_kaspa_block` sit on the main stack just above the
+/// ZK witness blob (pushed by the sig_script between the proof bytes and `new_lane_tip`, so the
+/// journal-prefix builders that consumed everything above them have peeled away), i.e. directly
+/// under the growing preimage that the appends below leave on top: `deposit_spk_hash` on top of
+/// `canonical_kaspa_block`. `verify_and_append_deposit_hash` lifts and consumes the former at the
+/// 288→320B point, leaving `canonical_kaspa_block` under the preimage for
+/// `verify_and_append_canonical_seq_commit` at the 352→384B point. After the SHA-256 only
+/// `[..zk_witness.., journal_hash]` remains, exactly the stack the `verify_risc0_*` terminator
+/// expects.
 ///
-/// The 352-byte preimage byte order matches `StateTransition::encode` field-for-field:
+/// The 384-byte preimage byte order matches `StateTransition::encode` field-for-field:
 /// `prev_state || prev_lane_tip || new_state || new_lane_tip || new_seq_commit || covenant_id ||
-///  tx_image_id || batch_image_id || permission_spk_hash || deposit_spk_hash || lane_key`.
+///  tx_image_id || batch_image_id || permission_spk_hash || deposit_spk_hash || lane_key ||
+///  canonical_seq_commit`.
 ///
 /// Output: `[..., journal_hash]`
 fn build_and_hash_journal(b: &mut ScriptBuilder, pins: &RedeemPins<'_>) {
@@ -639,7 +644,64 @@ fn build_and_hash_journal(b: &mut ScriptBuilder, pins: &RedeemPins<'_>) {
     b.add_op(OpFromAltStack).unwrap();
     b.add_op(OpCat).unwrap();
 
+    // Append the canonical-`R` seq_commit (gated on a witnessed Kaspa block) → 384B preimage.
+    verify_and_append_canonical_seq_commit(b);
+
     b.add_op(OpSHA256).unwrap();
+}
+
+/// Stack precondition: `[..., canonical_kaspa_block, preimage352]` (the 32-byte witnessed Kaspa
+/// block hash, supplied by the sig_script, sits directly under the 352-byte preimage — pushed just
+/// below `deposit_spk_hash`, so once that has been consumed this is the item under the growing
+/// preimage). Postcondition: `[..., preimage384]`.
+///
+/// Appends the canonical-`R` `seq_commit` to the journal preimage, *constructing* it on-chain rather
+/// than accepting it witnessed — the same discipline `obtain_new_seq_commitment` uses for
+/// `new_seq_commit`:
+/// - non-zero block ⇒ append `OpChainblockSeqCommit(canonical_kaspa_block)`, the sequencing
+///   commitment Kaspa recorded for that block *only if it is a buried chain ancestor* (the opcode
+///   fails otherwise, enforcing finality depth);
+/// - zero block ⇒ append 32 zero bytes (the guest's no-peg-out sentinel), skipping the opcode.
+///
+/// Because the appended bytes land in the SHA-256 preimage the proof must reproduce, the guest's
+/// journaled `canonical_seq_commit` is forced to equal this value. For a peg-out bundle the guest
+/// journaled `seq_commit(block-committing-r)`; here we bind it to the `seq_commit` of a block Kaspa's
+/// own consensus buried. A relayer cannot skip the check by witnessing a zero block: the journal
+/// would then commit `[0; 32]` where the proof committed a non-zero `seq_commit`, so the SHA-256 (and
+/// the settlement) fails. Nor can it substitute a different buried block: `seq_commit` is
+/// per-block-unique, so only the block the guest proved resolves to the journaled value. This is what
+/// certifies the ZKas state root `r` a peg-out burned against is committed by Kaspa's proof-of-work,
+/// removing the checkpoint publisher.
+fn verify_and_append_canonical_seq_commit(b: &mut ScriptBuilder) {
+    // Lift the witnessed block above the preimage.
+    b.add_op(OpSwap).unwrap();
+    // Stack: [..., preimage352, canonical_kaspa_block]
+
+    // ---- gate on canonical_kaspa_block != [0; 32] ----
+    b.add_op(OpDup).unwrap();
+    b.add_data(&[0u8; 32]).unwrap();
+    b.add_op(OpEqual).unwrap();
+    b.add_op(OpNot).unwrap();
+    // Stack: [..., preimage352, canonical_kaspa_block, is_nonzero]
+
+    b.add_op(OpIf).unwrap();
+    {
+        // Non-zero: resolve the block's buried sequencing commitment (fails if unburied/unknown).
+        b.add_op(OpChainblockSeqCommit).unwrap();
+        // Stack: [..., preimage352, canonical_seq_commit]
+    }
+    b.add_op(OpElse).unwrap();
+    {
+        // Zero (no peg-out this bundle): drop the block, append the zero sentinel.
+        b.add_op(OpDrop).unwrap();
+        b.add_data(&[0u8; 32]).unwrap();
+        // Stack: [..., preimage352, [0; 32]]
+    }
+    b.add_op(OpEndIf).unwrap();
+
+    // Append the constructed value → 384B preimage.
+    b.add_op(OpCat).unwrap();
+    // Stack: [..., preimage384]
 }
 
 /// Stack precondition: `[..., deposit_spk_hash, preimage288]` (the 32-byte witnessed

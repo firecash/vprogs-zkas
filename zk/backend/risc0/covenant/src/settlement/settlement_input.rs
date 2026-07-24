@@ -23,6 +23,11 @@ pub struct SettlementInput<'a> {
     pub new_lane_tip: &'a Hash,
     /// L1 chain block whose seq commitment the covenant script anchors `new_seq_commit` to.
     pub block_prove_to: Hash,
+    /// Kaspa block whose coinbase merge-mines the ZKas block committing the peg-out's state root
+    /// `r`; the covenant script resolves its buried `seq_commit` via `OpChainblockSeqCommit` and
+    /// binds it to the journal's `canonical_seq_commit`. `Hash::default()` (`[0; 32]`) when the
+    /// bundle settled no peg-out — the covenant then appends the zero sentinel instead.
+    pub canonical_kaspa_block: Hash,
     /// UTXO outpoint of the covenant being spent.
     pub prev_outpoint: TransactionOutpoint,
     /// Value carried on the covenant UTXO. Split between continuation and permission outputs

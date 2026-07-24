@@ -33,6 +33,12 @@ pub struct StateTransition {
     pub deposit_spk_hash: [u8; 32],
     /// Lane key of the lane this settlement binds to.
     pub lane_key: Hash,
+    /// Canonical-`R` `seq_commit` carried from the batch journals, or `[0u8; 32]` when the bundle
+    /// settled no peg-out. Non-zero values cause the on-chain settlement to require this to equal
+    /// `OpChainblockSeqCommit(canonical_kaspa_block)` for a witnessed, buried Kaspa block — the
+    /// check that certifies the ZKas state root `r` a peg-out burned against is committed by Kaspa's
+    /// own proof-of-work. Trailing field so the redeem preimage appends it last.
+    pub canonical_seq_commit: [u8; 32],
 }
 
 impl StateTransition {
@@ -52,6 +58,7 @@ impl StateTransition {
         w.write(args.permission_spk_hash);
         w.write(args.deposit_spk_hash);
         w.write(args.lane_key.as_slice());
+        w.write(args.canonical_seq_commit);
     }
 }
 
@@ -79,6 +86,8 @@ pub struct StateTransitionArgs<'a> {
     pub deposit_spk_hash: &'a [u8; 32],
     /// See [`StateTransition::lane_key`].
     pub lane_key: &'a Hash,
+    /// See [`StateTransition::canonical_seq_commit`].
+    pub canonical_seq_commit: &'a [u8; 32],
 }
 
 #[cfg(test)]
@@ -102,10 +111,11 @@ mod tests {
                 permission_spk_hash: &[0u8; 32],
                 deposit_spk_hash: &[0u8; 32],
                 lane_key: &Hash::default(),
+                canonical_seq_commit: &[0u8; 32],
             },
         );
         assert_eq!(buf.len(), StateTransition::WIRE_SIZE);
-        assert_eq!(StateTransition::WIRE_SIZE, 352);
+        assert_eq!(StateTransition::WIRE_SIZE, 384);
     }
 
     /// The 352-byte preimage byte order the on-chain settlement redeem script assembles
@@ -127,6 +137,7 @@ mod tests {
         let permission_spk_hash = [0x09u8; 32];
         let deposit_spk_hash = [0x0au8; 32];
         let lane_key = Hash::from_bytes([0x0bu8; 32]);
+        let canonical_seq_commit = [0x0cu8; 32];
 
         let mut buf = Vec::new();
         StateTransition::encode(
@@ -143,9 +154,10 @@ mod tests {
                 permission_spk_hash: &permission_spk_hash,
                 deposit_spk_hash: &deposit_spk_hash,
                 lane_key: &lane_key,
+                canonical_seq_commit: &canonical_seq_commit,
             },
         );
-        assert_eq!(buf.len(), 352);
+        assert_eq!(buf.len(), 384);
 
         // The exact append order `script.rs::build_and_hash_journal` emits.
         assert_eq!(&buf[0..32], &prev_state);
@@ -162,6 +174,11 @@ mod tests {
             &deposit_spk_hash,
             "deposit_spk_hash must sit between permission_spk_hash and lane_key (288..320)",
         );
-        assert_eq!(&buf[320..352], lane_key.as_bytes(), "lane_key stays last (320..352)");
+        assert_eq!(&buf[320..352], lane_key.as_bytes(), "lane_key at 320..352");
+        assert_eq!(
+            &buf[352..384],
+            &canonical_seq_commit,
+            "canonical_seq_commit is appended last (352..384)",
+        );
     }
 }

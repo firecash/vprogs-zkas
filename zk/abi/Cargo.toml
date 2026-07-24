@@ -16,11 +16,22 @@ host = [
 ]
 std = []
 
+# Encodes `canonical-r-probe --emit` output into peg-out ix_data (the relayer's wire half).
+[[bin]]
+name              = "canonical-r-encode"
+path              = "src/bin/canonical_r_encode.rs"
+required-features = ["std"]
+
 [dependencies]
+# ZKas shielded-state-root recomputation inside the peg-out guest. Must be the same
+# personalized blake2b the ZKas chain commits with, so the guest can verify a claimed
+# state root rather than trust it. `default-features = false` keeps it no_std for riscv32.
+blake2b_simd                = { workspace = true }
 borsh                       = { workspace = true, default-features = false, optional = true }
 kaspa-consensus-core        = { workspace = true, optional = true }
 kaspa-hashes                = { workspace = true }
 kaspa-rpc-core              = { workspace = true, optional = true }
+kaspa-merkle                = { workspace = true }
 kaspa-seq-commit            = { workspace = true }
 kaspa-smt                   = { workspace = true }
 tap                         = { workspace = true }

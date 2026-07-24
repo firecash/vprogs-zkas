@@ -327,7 +327,8 @@ fn tx_journal(
     buf.push(OutputCommitment::SUCCESS);
     buf.extend_from_slice(&(exit_bytes.len() as u32).to_le_bytes());
     buf.extend_from_slice(&exit_bytes);
-    buf.extend_from_slice(&[0u8; 32]);
+    buf.extend_from_slice(&[0u8; 32]); // deposit_spk_hash
+    buf.extend_from_slice(&[0u8; 32]); // canonical_seq_commit
     for output in outputs {
         match output {
             Some(hash) => {

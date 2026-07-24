@@ -39,6 +39,9 @@ where
     /// Deposit-address commitment carried from the batch journals, or `[0u8; 32]` when no batch
     /// credited a deposit. See [`carry_deposit_hash`].
     deposit_spk_hash: [u8; 32],
+    /// Canonical-`R` `seq_commit` carried from the batch journals, or `[0u8; 32]` when no batch
+    /// settled a peg-out. See [`carry_canonical_seq_commit`].
+    canonical_seq_commit: [u8; 32],
 }
 
 impl<'a, V, A> Verifier<'a, V, A>
@@ -62,6 +65,7 @@ where
             verify_batch_journal,
             exits,
             deposit_spk_hash: [0u8; 32],
+            canonical_seq_commit: [0u8; 32],
         }
     }
 
@@ -70,6 +74,10 @@ where
         // Stream the exits of the first batch and carry its deposit hash.
         Self::stream_exits(&mut self.exits, self.first_batch);
         carry_deposit_hash(&mut self.deposit_spk_hash, &self.first_batch.deposit_spk_hash);
+        carry_canonical_seq_commit(
+            &mut self.canonical_seq_commit,
+            &self.first_batch.canonical_seq_commit,
+        );
 
         // Fold the remaining batches onto the anchor.
         self.remaining_batches.fold(self.first_batch, |prev, entry| {
@@ -92,6 +100,10 @@ where
                 // Stream this batch's exits in journal order and carry its deposit hash.
                 Self::stream_exits(&mut self.exits, this);
                 carry_deposit_hash(&mut self.deposit_spk_hash, &this.deposit_spk_hash);
+                carry_canonical_seq_commit(
+                    &mut self.canonical_seq_commit,
+                    &this.canonical_seq_commit,
+                );
             })
         })
     }
@@ -116,6 +128,7 @@ where
                 permission_spk_hash: &self.exits.finalize(),
                 deposit_spk_hash: &self.deposit_spk_hash,
                 lane_key: &self.first_batch.lane_key,
+                canonical_seq_commit: &self.canonical_seq_commit,
             },
         );
     }
@@ -182,5 +195,22 @@ fn carry_deposit_hash(carry: &mut [u8; 32], batch_hash: &[u8; 32]) {
         *carry = *batch_hash;
     } else {
         assert_eq!(carry, batch_hash, "two distinct deposit_spk_hash values in one bundle");
+    }
+}
+
+/// Folds a per-batch `canonical_seq_commit` into the bundle carry.
+///
+/// Same discipline as [`carry_deposit_hash`]: first non-zero value wins, the zero sentinel never
+/// overwrites it, and a second differing non-zero value panics. The canonical-`R` `seq_commit` is
+/// bundle-constant, so a bundle settling peg-outs against two distinct canonical Kaspa blocks is
+/// rejected in-proof.
+fn carry_canonical_seq_commit(carry: &mut [u8; 32], batch_seq_commit: &[u8; 32]) {
+    if *batch_seq_commit == [0u8; 32] {
+        return;
+    }
+    if *carry == [0u8; 32] {
+        *carry = *batch_seq_commit;
+    } else {
+        assert_eq!(carry, batch_seq_commit, "two distinct canonical_seq_commit values in one bundle");
     }
 }

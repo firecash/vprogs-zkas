@@ -16,6 +16,9 @@ pub enum OutputCommitment<'a> {
         /// Deposit-address commitment, or `[0u8; 32]` when the tx credited no L1 deposit. Fixed
         /// offset, before the variable-length resource stream.
         deposit_spk_hash: &'a [u8; 32],
+        /// Canonical-`R` `seq_commit`, or `[0u8; 32]` when the tx settled no peg-out. Fixed offset,
+        /// before the variable-length resource stream.
+        canonical_seq_commit: &'a [u8; 32],
         /// Lazy iterator over per-resource hash commitments.
         resources: OutputResourceCommitments<'a>,
     },
@@ -35,6 +38,7 @@ impl<'a> OutputCommitment<'a> {
             Self::SUCCESS => Ok(Self::Success {
                 exits: buf.blob_as("exits")?,
                 deposit_spk_hash: buf.array("deposit_spk_hash")?,
+                canonical_seq_commit: buf.array("canonical_seq_commit")?,
                 resources: OutputResourceCommitments::new(buf),
             }),
             Self::ERROR => Ok(Self::Error(Error::decode(buf)?)),
@@ -45,10 +49,11 @@ impl<'a> OutputCommitment<'a> {
     /// Encodes an output commitment payload to the journal, hashing resource data with `H`.
     pub fn encode<H: Hasher>(w: &mut impl Writer, result: &Result<Effects<'_>>) {
         match *result {
-            Ok(Effects { exits, deposit_spk_hash, resources }) => {
+            Ok(Effects { exits, deposit_spk_hash, canonical_seq_commit, resources }) => {
                 w.write(&[Self::SUCCESS]);
                 w.write_blob(exits.as_bytes());
                 w.write(deposit_spk_hash);
+                w.write(canonical_seq_commit);
                 for r in resources {
                     OutputResourceCommitment::encode::<H>(w, r);
                 }
@@ -75,25 +80,28 @@ mod tests {
         w: &mut Vec<u8>,
         exit_bytes: &[u8],
         deposit_hash: &[u8; 32],
+        canonical_seq_commit: &[u8; 32],
         resource_bytes: &[u8],
     ) {
         w.write(&[OutputCommitment::SUCCESS]);
         w.write_blob(exit_bytes);
         w.write(deposit_hash);
+        w.write(canonical_seq_commit);
         w.write(resource_bytes);
     }
 
     #[test]
     fn success_round_trip_no_resources_no_exits() {
         let mut buf = Vec::new();
-        encode_success_raw(&mut buf, &[], &[0u8; 32], &[]);
+        encode_success_raw(&mut buf, &[], &[0u8; 32], &[0u8; 32], &[]);
 
         let mut slice: &[u8] = &buf;
         let cmt = OutputCommitment::decode(&mut slice).unwrap();
         match cmt {
-            OutputCommitment::Success { exits, deposit_spk_hash, mut resources } => {
+            OutputCommitment::Success { exits, deposit_spk_hash, canonical_seq_commit, mut resources } => {
                 assert!(exits.is_empty());
                 assert_eq!(deposit_spk_hash, &[0u8; 32]);
+                assert_eq!(canonical_seq_commit, &[0u8; 32]);
                 assert!(resources.next().is_none());
             }
             OutputCommitment::Error(e) => panic!("expected success, got error: {e:?}"),
@@ -114,18 +122,20 @@ mod tests {
         sink.emit(StandardSpk::ScriptHash(&[0x22; 32]), 200).unwrap();
 
         let deposit_hash = [0x5A; 32];
+        let canonical = [0x6B; 32];
         let mut buf = Vec::new();
-        encode_success_raw(&mut buf, sink.as_bytes(), &deposit_hash, &resources);
+        encode_success_raw(&mut buf, sink.as_bytes(), &deposit_hash, &canonical, &resources);
 
         let mut slice: &[u8] = &buf;
         let cmt = OutputCommitment::decode(&mut slice).unwrap();
-        let (exits, deposit_spk_hash, resources) = match cmt {
-            OutputCommitment::Success { exits, deposit_spk_hash, resources } => {
-                (exits, deposit_spk_hash, resources)
+        let (exits, deposit_spk_hash, canonical_seq_commit, resources) = match cmt {
+            OutputCommitment::Success { exits, deposit_spk_hash, canonical_seq_commit, resources } => {
+                (exits, deposit_spk_hash, canonical_seq_commit, resources)
             }
             _ => panic!("expected success"),
         };
         assert_eq!(deposit_spk_hash, &deposit_hash);
+        assert_eq!(canonical_seq_commit, &canonical);
 
         // Consume resources.
         let r1 = resources.clone().next().unwrap().unwrap();

@@ -19,6 +19,7 @@ fn state_transition_round_trip() {
     let permission_spk_hash = [0x88; 32];
     let deposit_spk_hash = [0xBB; 32];
     let lane_key = Hash::from_bytes([0x99; 32]);
+    let canonical_seq_commit = [0xCC; 32];
 
     let mut buf = Vec::new();
     StateTransition::encode(
@@ -35,6 +36,7 @@ fn state_transition_round_trip() {
             permission_spk_hash: &permission_spk_hash,
             deposit_spk_hash: &deposit_spk_hash,
             lane_key: &lane_key,
+            canonical_seq_commit: &canonical_seq_commit,
         },
     );
     assert_eq!(buf.len(), StateTransition::WIRE_SIZE);
@@ -73,10 +75,12 @@ fn state_transition_zero_permission_hash_when_no_exits() {
             permission_spk_hash: &zero,
             deposit_spk_hash: &zero,
             lane_key: &Hash::from_bytes(zero),
+            canonical_seq_commit: &zero,
         },
     );
 
     let decoded = (&mut &buf[..]).array_as::<StateTransition>("state_transition").unwrap();
     assert_eq!(decoded.permission_spk_hash, zero);
     assert_eq!(decoded.deposit_spk_hash, zero);
+    assert_eq!(decoded.canonical_seq_commit, zero);
 }

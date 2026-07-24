@@ -356,6 +356,23 @@ where
         // is then released. With no queue wired the bundle is proved but not settled (exec/test
         // paths).
         log::info!("aggregate-prover: proved bundle through {block_prove_to} (size {take})");
+
+        // Resolve the Kaspa block whose buried seq_commit reproduces the journal's
+        // `canonical_seq_commit`, best-effort from the bundle's own block metadata. The peg-out's
+        // canonical block is usually within the bundle window; when it is not, the relayer must plumb
+        // it through explicitly (a real peg-out then fails closed at the covenant SHA-256 rather than
+        // settling unbound). Off the peg-out path this is the zero sentinel's default.
+        let canonical_kaspa_block = if st.canonical_seq_commit == [0u8; 32] {
+            Hash::default()
+        } else {
+            bundle
+                .iter()
+                .map(|b| b.checkpoint().metadata())
+                .find(|m| m.seq_commit.as_bytes() == st.canonical_seq_commit)
+                .map(|m| m.hash)
+                .unwrap_or_default()
+        };
+
         let artifact = SettlementArtifact {
             receipt,
             block_prove_to,
@@ -366,6 +383,14 @@ where
             new_seq_commit: st.new_seq_commit,
             permission_spk_hash: st.permission_spk_hash,
             deposit_spk_hash: st.deposit_spk_hash,
+            canonical_seq_commit: st.canonical_seq_commit,
+            // The Kaspa block the covenant resolves via `OpChainblockSeqCommit` to reproduce
+            // `canonical_seq_commit`. When the bundle settled a peg-out this must be the block whose
+            // buried seq_commit equals `st.canonical_seq_commit`; the prover populates it from the
+            // peg-out's canonical-`R` witness (see `SettlementArtifact::canonical_kaspa_block`).
+            // Off the peg-out path (`canonical_seq_commit == [0; 32]`) the covenant appends the zero
+            // sentinel and this stays `Hash::default()`.
+            canonical_kaspa_block,
             covenant_id: st.covenant_id,
         };
         handle.publish_artifact(Some(artifact));

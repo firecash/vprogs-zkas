@@ -13,6 +13,7 @@
 //! [`StateTransition`] - re-exported here so host-side callers can decode it without adding a
 //! direct dependency on the abi crate.
 
+pub mod canonical_r_gate;
 pub mod bootstrap;
 pub mod script;
 pub mod settlement;

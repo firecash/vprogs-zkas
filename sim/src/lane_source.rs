@@ -46,6 +46,9 @@ impl LaneProofSource for ConsensusLaneSource {
                 payload_and_ctx_digest: Hash::default(),
                 parent_seq_commit: Hash::default(),
                 inactivity_shortcut: Hash::default(),
+                context_hash: Hash::default(),
+                lanes_root: Hash::default(),
+                miner_payload_leaves: Vec::new(),
             };
         };
         // Mirrors the RPC service's conversion (rpc/service/src/service.rs at the pinned commit):
@@ -59,6 +62,9 @@ impl LaneProofSource for ConsensusLaneSource {
             payload_and_ctx_digest: proof.payload_and_ctx_digest,
             parent_seq_commit: proof.parent_seq_commit,
             inactivity_shortcut: proof.inactivity_shortcut,
+            context_hash: proof.context_hash,
+            lanes_root: proof.lanes_root,
+            miner_payload_leaves: proof.miner_payload_leaves,
         }
     }
 }

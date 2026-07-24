@@ -67,6 +67,7 @@ fn batch_journal(
             covenant_id: &covenant_id,
             tx_image_id: &tx_image_id,
             deposit_spk_hash: &[0u8; 32],
+            canonical_seq_commit: &[0u8; 32],
             lane_expired,
             exits,
         },

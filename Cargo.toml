@@ -25,6 +25,7 @@ exclude = [
   "zk/backend/risc0/batch-processor",
   "zk/backend/risc0/batch-aggregator",
   "zk/backend/risc0/runtime-processor",
+  "zk/backend/risc0/zkas-burn-processor",
 ]
 members = [
   "core/*",
@@ -120,28 +121,28 @@ resolver = "3"
   # convert path the L2 bridge's settlement detection reads; the prior `covpp-reset2-rpc-lane-proof`
   # branch dropped it. Newer API revision than the old covpp pin, so the vprogs side carries a v2.0
   # API-drift port.
-  kaspa-addresses = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-consensus = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-consensus-notify = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-core = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-database = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-grpc-client = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-hashes = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master", default-features = false, features = [
+  kaspa-addresses = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-consensus = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-consensus-core = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-consensus-notify = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-core = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-database = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-grpc-client = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-hashes = { git = "https://github.com/firecash/zkas-rusty", branch = "main", default-features = false, features = [
     "zerocopy",
   ] }
-  kaspa-merkle = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-notify = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-rpc-core = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-seq-commit = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master", default-features = false }
-  kaspa-smt = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master", default-features = false }
-  kaspa-testing-integration = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-utils = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-wrpc-client = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspa-wrpc-server = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  kaspad = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
-  simpa = { git = "https://github.com/kaspanet/rusty-kaspa", branch = "master" }
+  kaspa-merkle = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-notify = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-rpc-core = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-seq-commit = { git = "https://github.com/firecash/zkas-rusty", branch = "main", default-features = false }
+  kaspa-smt = { git = "https://github.com/firecash/zkas-rusty", branch = "main", default-features = false }
+  kaspa-testing-integration = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-txscript = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-utils = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-wrpc-client = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspa-wrpc-server = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  kaspad = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
+  simpa = { git = "https://github.com/firecash/zkas-rusty", branch = "main" }
 
   # Internal dependencies
   vprogs-core-atomics                             = { path = "core/atomics" }

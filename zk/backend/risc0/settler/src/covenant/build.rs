@@ -145,6 +145,7 @@ pub fn build_settlement(
         new_state: &artifact.new_state,
         new_lane_tip: &artifact.new_lane_tip,
         block_prove_to: artifact.block_prove_to,
+        canonical_kaspa_block: artifact.canonical_kaspa_block,
         prev_outpoint: cov.outpoint,
         value: cov.value,
         witness: owned_witness.as_witness(),
@@ -152,10 +153,15 @@ pub fn build_settlement(
     });
     let continuation_spk = pay_to_script_hash_script(&settlement.next_redeem);
 
-    // The script engine anchors `new_seq_commit` to `block_prove_to`; feed it the bundle's value so
-    // the budget covers exactly the units the covenant input consumes.
-    let accessor =
-        AnchorSeqCommit { block: artifact.block_prove_to, seq_commit: artifact.new_seq_commit };
+    // The script engine anchors `new_seq_commit` to `block_prove_to` and, on the peg-out path, the
+    // journal's `canonical_seq_commit` to `canonical_kaspa_block`; feed it both mappings and the
+    // bundle's value so the budget covers exactly the units the covenant input consumes.
+    let accessor = AnchorSeqCommit {
+        block: artifact.block_prove_to,
+        seq_commit: artifact.new_seq_commit,
+        canonical_block: artifact.canonical_kaspa_block,
+        canonical_seq_commit: Hash::from_bytes(artifact.canonical_seq_commit),
+    };
     let compute_budget = settlement.covenant_compute_budget(cov.covenant_id, &accessor);
 
     BuiltSettlement {
@@ -280,18 +286,36 @@ fn redeem_pins<'a>(backend: &'a Backend, lane_key: &'a Hash) -> RedeemPins<'a> {
     })
 }
 
-/// Single-block [`SeqCommitAccessor`] for sizing the covenant input's compute budget off chain.
+/// Two-block [`SeqCommitAccessor`] for sizing the covenant input's compute budget off chain: the
+/// bundle's `block_prove_to` (anchoring `new_seq_commit`) and, on the peg-out path, the
+/// `canonical_kaspa_block` (anchoring the journal's `canonical_seq_commit`). A zero
+/// `canonical_block` (no peg-out) never matches, so the covenant's zero-sentinel branch does not
+/// query the accessor.
 struct AnchorSeqCommit {
     block: Hash,
     seq_commit: Hash,
+    canonical_block: Hash,
+    canonical_seq_commit: Hash,
+}
+
+impl AnchorSeqCommit {
+    fn lookup(&self, block_hash: Hash) -> Option<Hash> {
+        if block_hash == self.block {
+            Some(self.seq_commit)
+        } else if block_hash == self.canonical_block {
+            Some(self.canonical_seq_commit)
+        } else {
+            None
+        }
+    }
 }
 
 impl SeqCommitAccessor for AnchorSeqCommit {
     fn is_chain_ancestor_from_pov(&self, block_hash: Hash) -> Option<bool> {
-        (block_hash == self.block).then_some(true)
+        self.lookup(block_hash).map(|_| true)
     }
 
     fn seq_commitment_within_depth(&self, block_hash: Hash) -> Option<Hash> {
-        (block_hash == self.block).then_some(self.seq_commit)
+        self.lookup(block_hash)
     }
 }

@@ -29,6 +29,9 @@ pub struct BatchTransition {
     /// Deposit-address commitment carried from the per-tx journals, or `[0u8; 32]` when no tx in
     /// the batch credited a deposit; constant across the bundle.
     pub deposit_spk_hash: [u8; 32],
+    /// Canonical-`R` `seq_commit` carried from the per-tx journals, or `[0u8; 32]` when no tx in
+    /// the batch settled a peg-out; constant across the bundle.
+    pub canonical_seq_commit: [u8; 32],
     /// `1` if the lane re-anchored on `prev_seq_commit` instead of `prev_lane_tip`.
     pub lane_expired: u8,
     /// Per-tx exit emissions, concatenated in journal order.
@@ -48,6 +51,7 @@ impl BatchTransition {
         w.write(args.covenant_id);
         w.write(args.tx_image_id);
         w.write(args.deposit_spk_hash);
+        w.write(args.canonical_seq_commit);
         w.write(&[args.lane_expired as u8]);
         w.write(args.exits);
     }
@@ -75,6 +79,8 @@ pub struct BatchTransitionArgs<'a> {
     pub tx_image_id: &'a [u8; 32],
     /// See [`BatchTransition::deposit_spk_hash`].
     pub deposit_spk_hash: &'a [u8; 32],
+    /// See [`BatchTransition::canonical_seq_commit`].
+    pub canonical_seq_commit: &'a [u8; 32],
     /// See [`BatchTransition::lane_expired`].
     pub lane_expired: bool,
     /// Encoded [`BatchTransition::exits`] blob.

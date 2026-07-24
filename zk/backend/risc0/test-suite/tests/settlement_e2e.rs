@@ -339,6 +339,7 @@ async fn batch_proof_is_directly_settleable_single_batch() {
         new_state: &parsed.new_state,
         new_lane_tip: &parsed.new_lane_tip,
         block_prove_to: block_hashes[0],
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
         value: 100_000_000,
         witness: SettlementWitness::Succinct(SuccinctWitness {
@@ -366,6 +367,7 @@ async fn batch_proof_is_directly_settleable_single_batch() {
             new_state: &parsed.new_state,
             new_lane_tip: &parsed.new_lane_tip,
             block_prove_to: block_hashes[0],
+            canonical_kaspa_block: kaspa_hashes::Hash::default(),
             prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
             value: 100_000_000,
             witness: owned.as_witness(),
@@ -521,6 +523,7 @@ async fn batch_proof_groth16_is_directly_settleable_single_batch() {
         new_state: &parsed.new_state,
         new_lane_tip: &parsed.new_lane_tip,
         block_prove_to: block_hashes[0],
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
         value: 100_000_000,
         witness: SettlementWitness::Groth16 {
@@ -545,6 +548,7 @@ async fn batch_proof_groth16_is_directly_settleable_single_batch() {
             new_state: &parsed.new_state,
             new_lane_tip: &parsed.new_lane_tip,
             block_prove_to: block_hashes[0],
+            canonical_kaspa_block: kaspa_hashes::Hash::default(),
             prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
             value: 100_000_000,
             witness: owned.as_witness(),
@@ -697,6 +701,7 @@ async fn batch_proof_bundles_two_batches() {
         new_lane_tip: &parsed.new_lane_tip,
         // Anchor to the bundle's *final* block - the covenant only verifies one seq_commit.
         block_prove_to: block_hashes[1],
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
         value: 100_000_000,
         witness: SettlementWitness::Succinct(SuccinctWitness {
@@ -723,6 +728,7 @@ async fn batch_proof_bundles_two_batches() {
             new_state: &parsed.new_state,
             new_lane_tip: &parsed.new_lane_tip,
             block_prove_to: block_hashes[1],
+            canonical_kaspa_block: kaspa_hashes::Hash::default(),
             prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
             value: 100_000_000,
             witness: owned.as_witness(),
@@ -898,6 +904,7 @@ async fn batch_with_exits_takes_two_output_settlement_path() {
         new_state: &parsed.new_state,
         new_lane_tip: &parsed.new_lane_tip,
         block_prove_to: block_hashes[1],
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
         value: covenant_value,
         witness: SettlementWitness::Succinct(SuccinctWitness {
@@ -950,6 +957,7 @@ async fn batch_with_exits_takes_two_output_settlement_path() {
             new_state: &parsed.new_state,
             new_lane_tip: &parsed.new_lane_tip,
             block_prove_to: block_hashes[1],
+            canonical_kaspa_block: kaspa_hashes::Hash::default(),
             prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
             value: covenant_value,
             witness: owned.as_witness(),

@@ -1,0 +1,18 @@
+[Unit]
+Description=ZKas L2 settler/relayer (tn10-flow) — follows the L1 chain, proves and settles bundles
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# All configuration comes from the env file (wRPC URL, signing key, covenant, mode).
+EnvironmentFile=/etc/zkas-settler/settler.env
+ExecStart=/root/zkas/bin/tn10-flow
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+# Execution-only mode is light; the proving mode (TN10_SETTLE=1) is CPU/GPU heavy.
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

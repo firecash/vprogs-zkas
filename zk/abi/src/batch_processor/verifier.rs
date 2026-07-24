@@ -31,6 +31,9 @@ pub struct Verifier<'a, V> {
     /// Deposit-address commitment carried from the per-tx journals, or `[0u8; 32]` when no tx in
     /// the batch credited a deposit. See [`carry_deposit_hash`].
     deposit_spk_hash: [u8; 32],
+    /// Canonical-`R` `seq_commit` carried from the per-tx journals, or `[0u8; 32]` when no tx in
+    /// the batch settled a peg-out. See [`carry_canonical_seq_commit`].
+    canonical_seq_commit: [u8; 32],
 }
 
 impl<'a, V: FnMut(&[u8; 32], &[u8])> Verifier<'a, V> {
@@ -49,6 +52,7 @@ impl<'a, V: FnMut(&[u8; 32], &[u8])> Verifier<'a, V> {
             verify_tx_journal,
             exits: ExitSink::new(),
             deposit_spk_hash: [0u8; 32],
+            canonical_seq_commit: [0u8; 32],
         }
     }
 
@@ -114,6 +118,7 @@ impl<'a, V: FnMut(&[u8; 32], &[u8])> Verifier<'a, V> {
                 covenant_id: self.inputs.covenant_id,
                 tx_image_id: self.inputs.tx_image_id,
                 deposit_spk_hash: &self.deposit_spk_hash,
+                canonical_seq_commit: &self.canonical_seq_commit,
                 lane_expired: self.inputs.batch.lane_expired,
                 exits: self.exits.as_bytes(),
             },
@@ -137,8 +142,17 @@ impl<'a, V: FnMut(&[u8; 32], &[u8])> Verifier<'a, V> {
                     // Split successful output into exit and resource iterators, carrying the per-tx
                     // deposit hash. A failed tx commits no deposit.
                     let (output_exits, mut output_resources) = match entries.output_commitment {
-                        OutputCommitment::Success { exits, deposit_spk_hash, resources } => {
+                        OutputCommitment::Success {
+                            exits,
+                            deposit_spk_hash,
+                            canonical_seq_commit,
+                            resources,
+                        } => {
                             carry_deposit_hash(&mut self.deposit_spk_hash, deposit_spk_hash);
+                            carry_canonical_seq_commit(
+                                &mut self.canonical_seq_commit,
+                                canonical_seq_commit,
+                            );
                             (Some(exits), Some(resources))
                         }
                         OutputCommitment::Error(_) => (None, None),
@@ -246,6 +260,24 @@ fn carry_deposit_hash(carry: &mut [u8; 32], tx_hash: &[u8; 32]) {
         *carry = *tx_hash;
     } else {
         assert_eq!(carry, tx_hash, "two distinct deposit_spk_hash values in one batch");
+    }
+}
+
+/// Folds a per-tx `canonical_seq_commit` into the batch carry.
+///
+/// Same discipline as [`carry_deposit_hash`]: the carry takes the first non-zero value and keeps it,
+/// the zero sentinel ("no peg-out") never overwrites it, and a second differing non-zero value
+/// panics. The canonical-`R` `seq_commit` is bundle-constant, so a batch settling peg-outs against
+/// two distinct canonical Kaspa blocks is rejected in-proof (the relayer must batch peg-outs sharing
+/// one canonical anchor).
+fn carry_canonical_seq_commit(carry: &mut [u8; 32], tx_seq_commit: &[u8; 32]) {
+    if *tx_seq_commit == [0u8; 32] {
+        return;
+    }
+    if *carry == [0u8; 32] {
+        *carry = *tx_seq_commit;
+    } else {
+        assert_eq!(carry, tx_seq_commit, "two distinct canonical_seq_commit values in one batch");
     }
 }
 

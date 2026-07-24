@@ -29,6 +29,15 @@ pub struct SettlementArtifact<R> {
     /// the bundle journal, or all-zero when the bundle credited no L1 deposit. The settlement
     /// witness forwards it; the redeem script binds it to the delegate-entry address.
     pub deposit_spk_hash: [u8; 32],
+    /// Canonical-`R` `seq_commit` decoded from the bundle journal, or all-zero when the bundle
+    /// settled no peg-out. The covenant reconstructs this on-chain from [`Self::canonical_kaspa_block`]
+    /// and binds it to the journal; carried here to size the covenant input's compute budget.
+    pub canonical_seq_commit: [u8; 32],
+    /// Kaspa block whose buried `seq_commit` equals [`Self::canonical_seq_commit`] (the block that
+    /// merge-mined the ZKas block committing the peg-out's `r`), or `Hash::default()` when the bundle
+    /// settled no peg-out. Supplied by the prover from the peg-out's canonical-`R` witness and
+    /// witnessed into the settlement sig_script; the covenant resolves it via `OpChainblockSeqCommit`.
+    pub canonical_kaspa_block: Hash,
     /// Covenant id the bundle binds to.
     pub covenant_id: [u8; 32],
 }

@@ -53,6 +53,10 @@ fn apply_sim_params(params: &mut Params, rate: SimRate, coinbase_maturity: Optio
     let SimRate { bps, delay } = rate;
     params.coinbase_maturity = 200;
 
+    // The L2 rollup's base chain is transparent: shielding is the L2's job, and the sim's L1 miner
+    // pays a plain coinbase. Our fork defaults this on for devnet, so force it off here.
+    params.shielded_coinbase = false;
+
     let max_delay = delay.max(NETWORK_DELAY_BOUND as f64);
     let k = u64::max(calculate_ghostdag_k(2.0 * max_delay * bps, 0.05), params.ghostdag_k() as u64);
     let k = u64::min(k, KType::MAX as u64) as KType;

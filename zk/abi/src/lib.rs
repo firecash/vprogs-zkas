@@ -8,7 +8,13 @@ mod error_code;
 mod journals;
 mod read;
 
+pub mod canonical_r;
+pub mod kaspa_hashing;
+pub mod seq_commit_witness;
+pub mod zkas_bridge;
+
 pub mod withdrawal {
+    pub(crate) mod canonical_sink;
     pub(crate) mod deposit_sink;
     pub(crate) mod exit_accumulator;
     pub(crate) mod exit_sink;
@@ -18,6 +24,7 @@ pub mod withdrawal {
     pub(crate) mod script_bytes;
     pub(crate) mod standard_spk;
 
+    pub use canonical_sink::CanonicalSink;
     pub use deposit_sink::DepositSink;
     pub use exit_accumulator::ExitAccumulator;
     pub use exit_sink::ExitSink;

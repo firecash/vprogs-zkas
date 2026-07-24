@@ -154,6 +154,7 @@ async fn deposit_and_withdraw_settle_with_deposit_and_permission_commitments() {
         new_state: &parsed.new_state,
         new_lane_tip: &parsed.new_lane_tip,
         block_prove_to: block_hashes[0],
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0xCD; 32]), 0),
         value: covenant_value,
         witness: SettlementWitness::Succinct(SuccinctWitness {

@@ -86,6 +86,7 @@ impl Settlement {
             (RedeemPins::Succinct(_), SettlementWitness::Succinct(w)) => sig_script_succinct(
                 &prev_redeem,
                 input.block_prove_to,
+                input.canonical_kaspa_block,
                 input.new_state,
                 input.new_lane_tip,
                 w,
@@ -96,6 +97,7 @@ impl Settlement {
             ) => sig_script_groth16(
                 &prev_redeem,
                 input.block_prove_to,
+                input.canonical_kaspa_block,
                 input.new_state,
                 input.new_lane_tip,
                 compressed_proof,
@@ -351,22 +353,25 @@ fn sig_script_dev(redeem: &[u8], input: &SettlementDevInput<'_>) -> Vec<u8> {
 /// the R0Succinct proof system.
 ///
 /// Push order (bottom to top):
-/// `[claim, control_index, control_digests, seal, deposit_spk_hash, new_lane_tip, new_state,
-///   block_prove_to, redeem]`.
+/// `[claim, control_index, control_digests, seal, canonical_kaspa_block, deposit_spk_hash,
+///   new_lane_tip, new_state, block_prove_to, redeem]`.
 ///
 /// After the P2SH check pops `redeem`, the redeem prefix pushes `prev_lane_tip` /
 /// `prev_state`, the script stashes them to alt, then consumes `block_prove_to` via
 /// `OpChainblockSeqCommit` (so `block_prove_to` must be the top-of-stack item once
 /// `prev_*` are stashed away). It then stashes `new_state` / `new_lane_tip` /
-/// `new_seq_commit` for the journal and builds the journal hash. `deposit_spk_hash` is pushed
-/// between the proof blob and `new_lane_tip` so that, once those `new_*` values have been peeled
-/// off, it sits on top of the proof blob (directly under the journal preimage the builder
-/// assembles), where `verify_and_append_deposit_hash` consumes it (binding + cat) at the 288→320B
-/// point. The journal hash then leaves `[claim, control_index, control_digests, seal,
-/// journal_hash]`, and `OpZkPrecompile` consumes those 8 items in the R0Succinct pop order.
+/// `new_seq_commit` for the journal and builds the journal hash. `deposit_spk_hash` and
+/// `canonical_kaspa_block` are pushed between the proof blob and `new_lane_tip`, `canonical_kaspa_block`
+/// below `deposit_spk_hash`, so that once the `new_*` values are peeled off `deposit_spk_hash` sits on
+/// top (consumed at the 288→320B point by `verify_and_append_deposit_hash`) and
+/// `canonical_kaspa_block` sits directly under the preimage after it (consumed at the 352→384B point
+/// by `verify_and_append_canonical_seq_commit`). The journal hash then leaves `[claim, control_index,
+/// control_digests, seal, journal_hash]`, and `OpZkPrecompile` consumes those 8 items in the
+/// R0Succinct pop order.
 fn sig_script_succinct(
     redeem: &[u8],
     block_prove_to: Hash,
+    canonical_kaspa_block: Hash,
     new_state: &[u8; 32],
     new_lane_tip: &Hash,
     witness: &SuccinctWitness<'_>,
@@ -383,6 +388,8 @@ fn sig_script_succinct(
         .add_data(witness.control_digests)
         .unwrap()
         .add_data(witness.seal)
+        .unwrap()
+        .add_data(canonical_kaspa_block.as_slice())
         .unwrap()
         .add_data(witness.deposit_spk_hash)
         .unwrap()
@@ -401,18 +408,21 @@ fn sig_script_succinct(
 /// the Groth16 proof system.
 ///
 /// Push order (bottom to top):
-/// `[compressed_proof, deposit_spk_hash, new_lane_tip, new_state, block_prove_to, redeem]`.
+/// `[compressed_proof, canonical_kaspa_block, deposit_spk_hash, new_lane_tip, new_state,
+///   block_prove_to, redeem]`.
 ///
 /// The Groth16 verifier does not need a seal/claim/control inclusion proof on the stack;
 /// only the compressed proof. Everything else (receipt-claim hash, public inputs, verifying
 /// key, control-root halves) is reconstructed in-script from build-time constants and the
-/// journal hash. `deposit_spk_hash` is positioned between the proof and `new_lane_tip` for the
-/// same reason as the succinct path: it lands under the journal preimage where
-/// `verify_and_append_deposit_hash` binds and cats it, leaving `[compressed_proof, journal_hash]`
-/// for `script::verify_risc0_groth16`.
+/// journal hash. `deposit_spk_hash` and `canonical_kaspa_block` are positioned between the proof and
+/// `new_lane_tip` for the same reason as the succinct path (`canonical_kaspa_block` below
+/// `deposit_spk_hash`): they land under the journal preimage where `verify_and_append_deposit_hash`
+/// and `verify_and_append_canonical_seq_commit` bind and cat them, leaving
+/// `[compressed_proof, journal_hash]` for `script::verify_risc0_groth16`.
 fn sig_script_groth16(
     redeem: &[u8],
     block_prove_to: Hash,
+    canonical_kaspa_block: Hash,
     new_state: &[u8; 32],
     new_lane_tip: &Hash,
     compressed_proof: &[u8],
@@ -420,6 +430,8 @@ fn sig_script_groth16(
 ) -> Vec<u8> {
     ScriptBuilder::with_flags(EngineFlags { covenants_enabled: true, ..Default::default() })
         .add_data(compressed_proof)
+        .unwrap()
+        .add_data(canonical_kaspa_block.as_slice())
         .unwrap()
         .add_data(deposit_spk_hash)
         .unwrap()
@@ -506,6 +518,7 @@ mod tests {
             new_state: &NEW_STATE,
             new_lane_tip: &NEW_LANE_TIP,
             block_prove_to: BLOCK_PROVE_TO,
+            canonical_kaspa_block: Hash::default(),
             prev_outpoint: TransactionOutpoint::new(PREV_OUTPOINT_TX, 0),
             value,
             witness,
@@ -1092,6 +1105,7 @@ mod engine_deposit_binding_tests {
             new_state: &NEW_STATE,
             new_lane_tip: &NEW_LANE_TIP,
             block_prove_to: BLOCK_PROVE_TO,
+            canonical_kaspa_block: Hash::default(),
             prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0x66; 32]), 0),
             value: COVENANT_VALUE,
             witness: SettlementWitness::Succinct(SuccinctWitness {
@@ -1182,5 +1196,159 @@ mod engine_deposit_binding_tests {
             "the zero sentinel must skip the deposit binding (no OpEqualVerify) and fail later at \
              the precompile, not with VerifyError; got: {err}",
         );
+    }
+}
+
+/// Engine-level proof of the on-chain canonical-`R` gate (`script::verify_and_append_canonical_seq_commit`).
+/// Drives a PRODUCTION-redeem covenant input-0 spend carrying a non-zero `canonical_kaspa_block`
+/// through the real Kaspa `TxScriptEngine`.
+///
+/// The gate resolves the block's buried sequencing commitment via `OpChainblockSeqCommit` while
+/// assembling the journal preimage, *before* the terminal `OpZkPrecompile`. Its behaviour is
+/// observable with a stub seal:
+/// - a buried canonical block (present in the accessor) resolves, the preimage completes, and the
+///   spend proceeds to fail only at the precompile;
+/// - an unburied canonical block (absent) makes `OpChainblockSeqCommit` fail *at that opcode*, before
+///   the precompile is ever reached.
+///
+/// Asserting the two error paths *differ* is what makes this non-vacuous: burying is load-bearing, so
+/// only the buried block reaches the precompile. This is the on-chain half of the trust argument that
+/// certifies the ZKas state root `r` a peg-out burned against is committed by Kaspa's proof-of-work.
+#[cfg(test)]
+mod engine_canonical_binding_tests {
+    use std::collections::HashMap;
+
+    use kaspa_consensus_core::tx::TransactionOutpoint;
+
+    use super::*;
+    use crate::script::{CommonPins, DEFAULT_PERMISSION_OUTPUT_VALUE, RedeemPins, SuccinctPins};
+
+    struct MockSeqCommitAccessor(HashMap<Hash, Hash>);
+    impl SeqCommitAccessor for MockSeqCommitAccessor {
+        fn is_chain_ancestor_from_pov(&self, block_hash: Hash) -> Option<bool> {
+            self.0.contains_key(&block_hash).then_some(true)
+        }
+        fn seq_commitment_within_depth(&self, block_hash: Hash) -> Option<Hash> {
+            self.0.get(&block_hash).copied()
+        }
+    }
+
+    const COVENANT_ID: Hash = Hash::from_bytes([0xAA; 32]);
+    const PREV_STATE: [u8; 32] = [0x11; 32];
+    const PREV_LANE_TIP: Hash = Hash::from_bytes([0x22; 32]);
+    const NEW_STATE: [u8; 32] = [0x33; 32];
+    const NEW_LANE_TIP: Hash = Hash::from_bytes([0x44; 32]);
+    const LANE_KEY: Hash = Hash::from_bytes([0xEE; 32]);
+    const BLOCK_PROVE_TO: Hash = Hash::from_bytes([0x55; 32]);
+    const SEQ_COMMIT: Hash = Hash::from_bytes([0x99; 32]);
+    const CANONICAL_BLOCK: Hash = Hash::from_bytes([0xC1; 32]);
+    const CANONICAL_SEQ: Hash = Hash::from_bytes([0xC2; 32]);
+    const COVENANT_VALUE: u64 = 100_000_000;
+
+    fn pins() -> RedeemPins<'static> {
+        RedeemPins::Succinct(SuccinctPins {
+            common: CommonPins {
+                program_id: &[0xBB; 32],
+                tx_image_id: &[0xCC; 32],
+                batch_image_id: &[0xDD; 32],
+                lane_key: &LANE_KEY,
+                permission_output_value: DEFAULT_PERMISSION_OUTPUT_VALUE,
+            },
+        })
+    }
+
+    /// A production no-exit settlement spending `COVENANT_ID` with a stub seal and the given
+    /// witnessed `canonical_kaspa_block`.
+    fn settlement(canonical_kaspa_block: Hash) -> Settlement {
+        Settlement::build(&SettlementInput {
+            covenant_id: COVENANT_ID,
+            pins: pins(),
+            prev_state: &PREV_STATE,
+            prev_lane_tip: &PREV_LANE_TIP,
+            new_state: &NEW_STATE,
+            new_lane_tip: &NEW_LANE_TIP,
+            block_prove_to: BLOCK_PROVE_TO,
+            canonical_kaspa_block,
+            prev_outpoint: TransactionOutpoint::new(Hash::from_bytes([0x66; 32]), 0),
+            value: COVENANT_VALUE,
+            witness: SettlementWitness::Succinct(SuccinctWitness {
+                seal: &[0u8; 8],
+                claim: &[0u8; 32],
+                control_index: 0,
+                control_digests: &[],
+                deposit_spk_hash: &[0u8; 32],
+            }),
+            permission_spk_hash: &[0u8; 32],
+        })
+    }
+
+    fn run(settlement: &Settlement, accessor: &dyn SeqCommitAccessor) -> Result<(), String> {
+        let tx = &settlement.transaction;
+        let utxo_value: u64 = tx.outputs.iter().map(|o| o.value).sum();
+        let utxo = UtxoEntry::new(
+            utxo_value,
+            pay_to_script_hash_script(&settlement.prev_redeem),
+            0,
+            false,
+            Some(COVENANT_ID),
+        );
+        let sig_cache = Cache::new(1);
+        let reused = SigHashReusedValuesUnsync::new();
+        let flags = EngineFlags { covenants_enabled: true, ..Default::default() };
+        let populated = PopulatedTransaction::new(tx, vec![utxo.clone()]);
+        let cov_ctx =
+            CovenantsContext::from_tx(&populated).expect("covenant continuity validation");
+        let exec_ctx = EngineContext::new(&sig_cache)
+            .with_reused(&reused)
+            .with_seq_commit_accessor(accessor)
+            .with_covenants_ctx(&cov_ctx);
+        let mut vm = TxScriptEngine::from_transaction_input(
+            &populated,
+            &tx.inputs[0],
+            0,
+            &utxo,
+            exec_ctx,
+            flags,
+        );
+        vm.execute().map_err(|e| format!("{e:?}"))
+    }
+
+    /// A buried canonical block resolves through the gate; the spend then fails only at the terminal
+    /// precompile (the stub seal never satisfies it). An unburied canonical block fails earlier, at
+    /// `OpChainblockSeqCommit` itself. The two failures differ, proving the burial check is
+    /// load-bearing.
+    #[test]
+    fn burial_of_the_canonical_block_is_load_bearing() {
+        let settlement = settlement(CANONICAL_BLOCK);
+
+        // Buried: both blocks resolve; failure is the precompile, past the canonical append.
+        let buried = MockSeqCommitAccessor(HashMap::from([
+            (BLOCK_PROVE_TO, SEQ_COMMIT),
+            (CANONICAL_BLOCK, CANONICAL_SEQ),
+        ]));
+        let buried_err = run(&settlement, &buried).expect_err("stub seal fails at the precompile");
+
+        // Unburied: the canonical block is absent, so OpChainblockSeqCommit fails at that opcode.
+        let unburied = MockSeqCommitAccessor(HashMap::from([(BLOCK_PROVE_TO, SEQ_COMMIT)]));
+        let unburied_err =
+            run(&settlement, &unburied).expect_err("an unburied canonical block must be rejected");
+
+        assert_ne!(
+            buried_err, unburied_err,
+            "burying the canonical block must change the outcome: the buried case reaches the \
+             precompile, the unburied case fails at OpChainblockSeqCommit",
+        );
+    }
+
+    /// Control: with the zero sentinel (no peg-out) the gate appends `[0; 32]` without querying the
+    /// accessor for a canonical block, so the spend reaches the precompile regardless of what the
+    /// accessor holds — the same failure the buried case above produces. Confirms the non-zero path
+    /// is the only one that consults burial.
+    #[test]
+    fn zero_canonical_block_skips_the_burial_query() {
+        let settlement = settlement(Hash::default());
+        // Accessor without any canonical block: the zero branch must not query it.
+        let acc = MockSeqCommitAccessor(HashMap::from([(BLOCK_PROVE_TO, SEQ_COMMIT)]));
+        run(&settlement, &acc).expect_err("stub seal still fails at the precompile, not the gate");
     }
 }

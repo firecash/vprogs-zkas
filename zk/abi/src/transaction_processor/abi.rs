@@ -7,7 +7,7 @@ use crate::{
         Effects, InputCommitment, Inputs, OutputCommitment, Outputs, Transaction,
         TransactionHandler,
     },
-    withdrawal::{DepositSink, ExitSink},
+    withdrawal::{CanonicalSink, DepositSink, ExitSink},
 };
 
 /// Processes a single transaction inside the guest, committing input/output to `journal` and
@@ -31,10 +31,12 @@ pub fn process_transaction<H: Hasher>(
 
     let mut exits = ExitSink::new();
     let mut deposit = DepositSink::new();
-    // Copied out of the sink after the handler returns so `Effects` can borrow it for the duration
-    // of `OutputCommitment::encode`. Only read in the success arm below, which is also the only
-    // place it is assigned.
+    let mut canonical = CanonicalSink::new();
+    // Copied out of the sinks after the handler returns so `Effects` can borrow them for the
+    // duration of `OutputCommitment::encode`. Only read in the success arm below, which is also the
+    // only place they are assigned.
     let deposit_hash;
+    let canonical_seq_commit;
     let result = match version {
         Transaction::V1 => {
             // Unwrap and verify host-supplied execution input.
@@ -49,11 +51,14 @@ pub fn process_transaction<H: Hasher>(
                 &mut exec.resources,
                 &mut exits,
                 &mut deposit,
+                &mut canonical,
             );
             deposit_hash = deposit.get();
+            canonical_seq_commit = canonical.get();
             result.map(|_| Effects {
                 exits: &exits,
                 deposit_spk_hash: &deposit_hash,
+                canonical_seq_commit: &canonical_seq_commit,
                 resources: exec.resources.as_slice(),
             })
         }

@@ -6,7 +6,15 @@ version = "0.1.0"
 [features]
 cuda = ["vprogs-zk-backend-risc0-api/cuda"]
 
+# The peg-in/peg-out wallet CLI. Reuses the (tested) carrier builders in `runtime_flow`; those should
+# later move to a production crate so the CLI need not depend on the test-suite.
+[[bin]]
+name = "zkas-bridge-wallet"
+path = "src/bin/zkas_bridge_wallet.rs"
+
 [dependencies]
+clap                                      = { workspace = true, features = ["derive"] }
+tokio                                     = { workspace = true, features = ["rt-multi-thread", "macros"] }
 kaspa-addresses.workspace                 = true
 kaspa-consensus-core.workspace            = true
 kaspa-grpc-client.workspace               = true

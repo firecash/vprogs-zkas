@@ -7,6 +7,7 @@ use crate::bucket::Bucket;
 /// The tail and last-sealed buckets, kept hot so a shallow reorg avoids copying the body ring.
 ///
 /// See [`snapshot`](crate::snapshot) for how the hot zone sits above the body.
+#[derive(Clone)]
 pub(crate) struct HotZone {
     /// Bucket number of `tail` (the highest allocated bucket).
     pub(crate) tail_bucket: u64,

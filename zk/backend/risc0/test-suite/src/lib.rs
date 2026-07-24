@@ -64,6 +64,96 @@ pub async fn aggregate_batches<L: LaneProofSource>(
     backend.prove_aggregator(&inputs, batch_receipts).await
 }
 
+/// Builds a self-consistent canonical-`R` witness committing state root `r`, encoded to the wire
+/// bytes the peg-out guest expects as the second `ix_data` section (see
+/// [`vprogs_zk_abi::zkas_bridge::frame_ix_data`]).
+///
+/// This is the test analogue of what the ZKas relayer assembles from real chain data on the
+/// single-chain deployment: a mergeset member whose coinbase payload commits `r` at offset 16, plus
+/// the KIP-21 sequencing inputs of the distinct merging block that includes it. Every hash is
+/// produced by the same functions the guest verifies with, so
+/// [`OwnedCanonicalRWitness::verify_direct`] accepts it and returns the merging block's
+/// `seq_commit`: the value the guest journals and the covenant binds on-chain.
+pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
+    use kaspa_seq_commit::{
+        hashing::{
+            miner_payload_leaf, miner_payload_root, payload_and_context_digest, seq_commit,
+            seq_state_root,
+        },
+        types::{MinerPayloadLeafInput, SeqCommitInput, SeqState},
+    };
+    use vprogs_zk_abi::{
+        canonical_r::OwnedCanonicalRWitness,
+        kaspa_hashing::{CoinbaseOutput, coinbase_tx_hash_v0},
+    };
+
+    // ZKas coinbase: payload commits `r` at [16..48] (blue_score(8) + subsidy(8)), pre-Toccata v0.
+    let mut cb_payload = Vec::new();
+    cb_payload.extend_from_slice(&7u64.to_le_bytes());
+    cb_payload.extend_from_slice(&8u64.to_le_bytes());
+    cb_payload.extend_from_slice(r);
+    let mut cb_subnet = [0u8; 20];
+    cb_subnet[0] = 1;
+    let outputs = [CoinbaseOutput { value: 50, spk_version: 0, spk_script: &[0xaa] }];
+    let tx = coinbase_tx_hash_v0(0, &outputs, 0, &cb_subnet, 0, &cb_payload);
+
+    // Single-chain: the mergeset member's own coinbase commits `r` directly (no H_fc / ZKMM
+    // indirection), and it is a member of a distinct queried block.
+    let kaspa_payload = cb_payload.clone();
+    let kaspa_block = Hash::from_bytes([0x33; 32]);
+    let blue_work_be = [0x01u8, 0x02];
+    let activity_root = Hash::from_bytes([0x44; 32]);
+    let context_hash = Hash::from_bytes([0x55; 32]);
+    let parent_seq_commit = Hash::from_bytes([0x66; 32]);
+    let other = Hash::from_bytes([0xA0; 32]);
+
+    let our_leaf = miner_payload_leaf(MinerPayloadLeafInput {
+        block_hash: &kaspa_block,
+        blue_work_be_bytes: &blue_work_be,
+        payload: &kaspa_payload,
+    });
+    let payload_root = miner_payload_root([our_leaf, other].into_iter());
+    let pd = payload_and_context_digest(&context_hash, &payload_root);
+    let sr = seq_state_root(&SeqState { activity_root: &activity_root, payload_and_ctx_digest: &pd });
+    let expected_seq_commit =
+        seq_commit(&SeqCommitInput { parent_seq_commit: &parent_seq_commit, state_root: &sr });
+
+    let owned = OwnedCanonicalRWitness {
+        coinbase_version: 0,
+        coinbase_outputs: vec![(50u64, 0u16, vec![0xaa])],
+        coinbase_lock_time: 0,
+        coinbase_subnetwork: cb_subnet,
+        coinbase_gas: 0,
+        coinbase_payload: cb_payload,
+        coinbase_branch: vec![],
+        header_version: 1,
+        header_parents: vec![vec![[0x01; 32]]],
+        hash_merkle_root: tx.as_bytes(),
+        accepted_id_merkle_root: [0x02; 32],
+        utxo_commitment: [0x03; 32],
+        timestamp: 111,
+        bits: 22,
+        nonce: 333,
+        daa_score: 44,
+        blue_score: 55,
+        header_blue_work_be: vec![9],
+        pruning_point: [0x04; 32],
+        kaspa_payload,
+        kaspa_block_hash: [0xBB; 32],
+        kaspa_blue_work_be: vec![0x01, 0x02],
+        other_leaves: vec![[0xA0; 32]],
+        leaf_index: 0,
+        activity_root: [0x44; 32],
+        context_hash: [0x55; 32],
+        parent_seq_commit: [0x66; 32],
+        seq_commit: expected_seq_commit.as_bytes(),
+        member_block_hash: [0x33; 32],
+    };
+    // Self-check: the relayer never ships a witness the guest would reject.
+    owned.verify_direct(r).expect("test canonical-R witness must verify");
+    owned.encode()
+}
+
 /// Returns `true` when risc0 dev mode is active (env var `RISC0_DEV_MODE` is set to anything
 /// other than `0`). In dev mode the prover emits fake receipts, so any code path that
 /// cryptographically depends on the proof being real (receipt verification, on-chain script
@@ -98,6 +188,22 @@ pub fn transaction_processor_with_exits_elf() -> Vec<u8> {
         panic!(
             "transaction-processor-with-exits ELF not found at {elf_path}: {e}\n\
              Run `./zk/backend/risc0/build-guests.sh transaction-processor-with-exits` to rebuild it."
+        )
+    })
+}
+
+/// Loads the pre-built ZKas⇄Kaspa bridge peg-out guest ELF from the repository.
+///
+/// Each transaction carries a ZKas burn attestation in its `ix_data`; the guest verifies
+/// inclusion under the claimed state root, consumes the burn's nullifier exactly once, and emits
+/// the matching exit. See `zkas_bridge_e2e.rs`.
+pub fn zkas_burn_processor_elf() -> Vec<u8> {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let elf_path = format!("{manifest_dir}/../zkas-burn-processor/compiled/program.elf");
+    std::fs::read(&elf_path).unwrap_or_else(|e| {
+        panic!(
+            "zkas-burn-processor ELF not found at {elf_path}: {e}\n\
+             Run `./zk/backend/risc0/build-guests.sh zkas-burn-processor` to rebuild it."
         )
     })
 }

@@ -1,0 +1,17 @@
+[package]
+edition = "2021"
+name    = "vprogs-zk-backend-risc0-zkas-burn-processor"
+version = "0.1.0"
+
+# ZKas⇄Kaspa bridge peg-out guest. Each L2 transaction carries a ZKas burn attestation in its
+# `ix_data`; the guest verifies the exit receipt is included under the claimed ZKas state root,
+# consumes the burn's nullifier exactly once via a resource slot keyed by that nullifier, and
+# emits the matching L2→L1 exit. The exit flows through the permission tree into the settlement
+# covenant, which pays the recipient with no key anywhere in the path.
+
+[dependencies]
+risc0-zkvm = { version = "3.0", default-features = false, features = ["std"] }
+vprogs-zk-abi = { path = "../../../abi", default-features = false }
+vprogs-zk-backend-risc0-api = { path = "../api", default-features = false, features = [
+  "guest",
+] }

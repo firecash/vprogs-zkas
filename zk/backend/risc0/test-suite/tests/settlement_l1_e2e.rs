@@ -1070,6 +1070,7 @@ where
         new_state: &parsed.new_state,
         new_lane_tip: &parsed.new_lane_tip,
         block_prove_to: block_acc_carrier,
+        canonical_kaspa_block: kaspa_hashes::Hash::default(),
         prev_outpoint,
         value: COVENANT_VALUE,
         witness: owned_witness.as_witness(),
