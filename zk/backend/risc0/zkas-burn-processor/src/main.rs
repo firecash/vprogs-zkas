@@ -71,13 +71,16 @@ fn main() {
             // block's seq_commit for the covenant to bind on-chain. A peg-out with no valid
             // canonical-R witness produces no proof: the trust gap the sprint bridge left open.
             //
-            // Single-chain deployment: the block committing `r` is itself a mergeset member of the
-            // queried block, so `r` binds to seq_commit directly (verify_direct), with no `H_fc`
-            // merge-mining indirection.
+            // Two-chain (Kaspa-custody) deployment: the covenant lives on Kaspa mainnet, so the
+            // covenant's `OpChainblockSeqCommit` reads KASPA's KIP-21 seq_commit. The witness proves
+            // the chain `r → H_fc (ZKas header hash) → embedded in a Kaspa coinbase → that Kaspa
+            // block's seq_commit`, binding `r` to Kaspa's own proof-of-work via the merged-mining
+            // AuxPoW transport (`ZKMM ‖ H_fc`). `verify` (not `verify_direct`) enforces the full
+            // r→H_fc→Kaspa-seq_commit chain.
             let witness = OwnedCanonicalRWitness::decode(canon_bytes)
                 .ok_or(ErrorCode::BridgeMalformedCanonicalWitness)?;
             let proof = witness
-                .verify_direct(&att.r)
+                .verify(&att.r)
                 .map_err(|_| ErrorCode::BridgeCanonicalVerifyFailed)?;
             canonical
                 .set(&proof.seq_commit.as_bytes())

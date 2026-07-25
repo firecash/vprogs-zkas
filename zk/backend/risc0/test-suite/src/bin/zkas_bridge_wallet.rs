@@ -9,6 +9,7 @@
 //! follow-up so this CLI need not depend on the test-suite.
 
 use clap::{Parser, Subcommand};
+use kaspa_addresses::Prefix;
 use kaspa_consensus_core::{
     config::params::{DEVNET_PARAMS, MAINNET_PARAMS, Params, SIMNET_PARAMS, TESTNET_PARAMS},
     constants::TX_VERSION_TOCCATA,
@@ -43,6 +44,8 @@ struct Cli {
 /// The two bridge directions.
 #[derive(Subcommand)]
 enum Cmd {
+    /// Print the fund key's L1 address (mine or send coins here to fund deposits).
+    Address,
     /// Peg in: fund the covenant on L1 and credit an L2 user.
     Deposit {
         /// Covenant id, 64 hex chars.
@@ -73,8 +76,16 @@ enum Cmd {
 async fn main() {
     let cli = Cli::parse();
 
+    // The address command needs neither a node nor the carrier machinery.
+    if let Cmd::Address = cli.cmd {
+        let prefix = Prefix::from(params_for(&cli.network).net.network_type());
+        println!("{}", RuntimeSigner::from_scalar(cli.fund_scalar).p2pk_address(prefix));
+        return;
+    }
+
     // Build the runtime carrier for the requested direction.
     let carrier = match &cli.cmd {
+        Cmd::Address => unreachable!("handled above"),
         Cmd::Deposit { covenant, user_scalar, value } => {
             let user = RuntimeSigner::from_scalar(*user_scalar);
             deposit_carrier(hash32(covenant), &user, *value)

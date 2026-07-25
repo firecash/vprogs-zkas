@@ -69,10 +69,11 @@ pub async fn aggregate_batches<L: LaneProofSource>(
 /// [`vprogs_zk_abi::zkas_bridge::frame_ix_data`]).
 ///
 /// This is the test analogue of what the ZKas relayer assembles from real chain data on the
-/// single-chain deployment: a mergeset member whose coinbase payload commits `r` at offset 16, plus
-/// the KIP-21 sequencing inputs of the distinct merging block that includes it. Every hash is
-/// produced by the same functions the guest verifies with, so
-/// [`OwnedCanonicalRWitness::verify_direct`] accepts it and returns the merging block's
+/// two-chain (Kaspa-custody) deployment: a ZKas block whose coinbase payload commits `r` at offset
+/// 16 and whose header hashes to `H_fc`, merge-mined into a Kaspa block whose coinbase payload
+/// embeds `ZKMM ‖ hex(H_fc)`; that Kaspa block's KIP-21 seq_commit is the value the covenant reads
+/// on-chain via `OpChainblockSeqCommit`. Every hash is produced by the same functions the guest
+/// verifies with, so [`OwnedCanonicalRWitness::verify`] accepts it and returns the Kaspa block's
 /// `seq_commit`: the value the guest journals and the covenant binds on-chain.
 pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
     use kaspa_seq_commit::{
@@ -84,7 +85,8 @@ pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
     };
     use vprogs_zk_abi::{
         canonical_r::OwnedCanonicalRWitness,
-        kaspa_hashing::{CoinbaseOutput, coinbase_tx_hash_v0},
+        kaspa_hashing::{CoinbaseOutput, HeaderFields, coinbase_tx_hash_v0, header_hash},
+        seq_commit_witness::MERGE_MINE_MAGIC,
     };
 
     // ZKas coinbase: payload commits `r` at [16..48] (blue_score(8) + subsidy(8)), pre-Toccata v0.
@@ -97,9 +99,38 @@ pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
     let outputs = [CoinbaseOutput { value: 50, spk_version: 0, spk_script: &[0xaa] }];
     let tx = coinbase_tx_hash_v0(0, &outputs, 0, &cb_subnet, 0, &cb_payload);
 
-    // Single-chain: the mergeset member's own coinbase commits `r` directly (no H_fc / ZKMM
-    // indirection), and it is a member of a distinct queried block.
-    let kaspa_payload = cb_payload.clone();
+    // ZKas header → H_fc (the merge-mined block hash Kaspa's coinbase commits).
+    let level0: [[u8; 32]; 1] = [[0x01; 32]];
+    let parents: [&[[u8; 32]]; 1] = [&level0];
+    let header = HeaderFields {
+        version: 1,
+        parents: &parents,
+        hash_merkle_root: tx.as_bytes(),
+        accepted_id_merkle_root: [0x02; 32],
+        utxo_commitment: [0x03; 32],
+        timestamp: 111,
+        bits: 22,
+        nonce: 333,
+        daa_score: 44,
+        blue_score: 55,
+        blue_work_be: &[9],
+        pruning_point: [0x04; 32],
+    };
+    let hfc = header_hash(&header);
+
+    // Kaspa side: a block whose coinbase payload embeds `ZKMM ‖ hex(H_fc)` (the AuxPoW transport),
+    // and that Kaspa block's KIP-21 seq_commit.
+    let kaspa_payload = {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut out = Vec::new();
+        out.extend_from_slice(b"kaspa-cb");
+        out.extend_from_slice(&MERGE_MINE_MAGIC);
+        for b in hfc.as_bytes() {
+            out.push(HEX[(b >> 4) as usize]);
+            out.push(HEX[(b & 0x0f) as usize]);
+        }
+        out
+    };
     let kaspa_block = Hash::from_bytes([0x33; 32]);
     let blue_work_be = [0x01u8, 0x02];
     let activity_root = Hash::from_bytes([0x44; 32]);
@@ -139,7 +170,9 @@ pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
         header_blue_work_be: vec![9],
         pruning_point: [0x04; 32],
         kaspa_payload,
-        kaspa_block_hash: [0xBB; 32],
+        // Two-chain: the queried block IS the Kaspa block that merge-mined `H_fc`; its own
+        // seq_commit is what the covenant reads on-chain. `member_block_hash` is unused on this path.
+        kaspa_block_hash: kaspa_block.as_bytes(),
         kaspa_blue_work_be: vec![0x01, 0x02],
         other_leaves: vec![[0xA0; 32]],
         leaf_index: 0,
@@ -147,10 +180,10 @@ pub fn canonical_r_witness_for(r: &[u8; 32]) -> Vec<u8> {
         context_hash: [0x55; 32],
         parent_seq_commit: [0x66; 32],
         seq_commit: expected_seq_commit.as_bytes(),
-        member_block_hash: [0x33; 32],
+        member_block_hash: kaspa_block.as_bytes(),
     };
     // Self-check: the relayer never ships a witness the guest would reject.
-    owned.verify_direct(r).expect("test canonical-R witness must verify");
+    owned.verify(r).expect("test canonical-R witness must verify");
     owned.encode()
 }
 
