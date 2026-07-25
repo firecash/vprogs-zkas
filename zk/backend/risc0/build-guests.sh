@@ -32,7 +32,6 @@ if [ ! -f "$DOCKERIGNORE" ]; then
 **/target/
 **/target-idea/
 .git/
-.claude/
 node_modules/
 IGNORE
   trap 'rm -f "$DOCKERIGNORE"' EXIT

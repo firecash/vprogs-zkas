@@ -22,7 +22,6 @@ target-idea
 .idea/
 
 #  AI tool files
-CLAUDE.md
 
 # Node data directory
 .data/

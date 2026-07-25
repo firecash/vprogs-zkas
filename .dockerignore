@@ -1,5 +1,4 @@
 **/target/
 **/target-idea/
 .git/
-.claude/
 node_modules/
