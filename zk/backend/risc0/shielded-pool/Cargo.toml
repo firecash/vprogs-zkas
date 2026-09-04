@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name    = "vprogs-zk-backend-risc0-shielded-pool"
+version = "0.1.0"
+
+# Shielded-pool spend guest (demo of the production client-side prover): verifies one shielded
+# transaction — spend authority, membership under a settled anchor, keyed nullifiers, per-asset
+# conservation, the dual-asset fee floor — and commits ONLY the public journal.
+
+[dependencies]
+risc0-zkvm = { version = "=3.0.4", default-features = false, features = ["std"] }
+vprogs-shielded-demo-types = { path = "../../../shielded-demo-types" }
+
+[profile.release]
+lto       = true
+opt-level = 3
+
+[workspace]

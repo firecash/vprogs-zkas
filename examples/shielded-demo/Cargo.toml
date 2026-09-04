@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name    = "shielded-demo"
+version = "0.1.0"
+
+# End-to-end demo of the shielded pool: deposits, private transfers (hidden sender/recipient/
+# amount), dual-asset fees credited to the relayer, and a public exit — proving every transfer
+# through the real RISC0 spend guest and printing exactly what each observer can see.
+
+[dependencies]
+chacha20poly1305           = "0.10"
+hex                        = "0.4"
+rand                       = "0.8"
+risc0-binfmt               = "3.0.4"
+risc0-zkos-v1compat        = "2.2.2"
+risc0-zkvm                 = { version = "=3.0.4" }
+vprogs-shielded-demo-types = { path = "../../zk/shielded-demo-types" }
+x25519-dalek               = { version = "2", features = ["static_secrets"] }
