@@ -27,6 +27,7 @@
 mod confirm;
 mod covenant;
 mod settle;
+pub mod sweep;
 mod worker;
 
 pub use confirm::OutpointAt;

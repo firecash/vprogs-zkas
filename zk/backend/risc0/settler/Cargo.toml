@@ -24,5 +24,6 @@ vprogs-core-smt.workspace                  = true
 vprogs-l1-types.workspace                  = true
 vprogs-l1-wallet.workspace                 = true
 vprogs-zk-aggregate-prover.workspace       = true
+vprogs-zk-abi.workspace                    = true
 vprogs-zk-backend-risc0-api                = { workspace = true, features = ["host"] }
 vprogs-zk-backend-risc0-covenant.workspace = true

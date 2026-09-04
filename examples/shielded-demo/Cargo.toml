@@ -8,11 +8,22 @@ version = "0.1.0"
 # through the real RISC0 spend guest and printing exactly what each observer can see.
 
 [dependencies]
-chacha20poly1305           = "0.10"
-hex                        = "0.4"
-rand                       = "0.8"
-risc0-binfmt               = "3.0.4"
-risc0-zkos-v1compat        = "2.2.2"
-risc0-zkvm                 = { version = "=3.0.4" }
-vprogs-shielded-demo-types = { path = "../../zk/shielded-demo-types" }
-x25519-dalek               = { version = "2", features = ["static_secrets"] }
+chacha20poly1305                 = "0.10"
+hex                              = "0.4"
+kaspa-addresses.workspace        = true
+kaspa-consensus-core.workspace   = true
+kaspa-hashes.workspace           = true
+kaspa-rpc-core.workspace         = true
+kaspa-txscript.workspace         = true
+rand                             = "0.8"
+risc0-binfmt                     = "3.0.4"
+risc0-zkos-v1compat              = "2.2.2"
+risc0-zkvm                       = { version = "3.0" }
+tokio                            = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+vprogs-node-test-utils.workspace = true
+vprogs-shielded-demo-types       = { path = "../../zk/shielded-demo-types" }
+vprogs-zk-aggregate-prover.workspace = true
+vprogs-zk-backend-risc0-api      = { workspace = true, features = ["host"] }
+vprogs-zk-backend-risc0-settler.workspace = true
+vprogs-zk-backend-risc0-test-suite.workspace = true
+x25519-dalek                     = { version = "2", features = ["static_secrets"] }

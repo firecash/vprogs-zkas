@@ -164,6 +164,11 @@ pub fn build_settlement(
     };
     let compute_budget = settlement.covenant_compute_budget(cov.covenant_id, &accessor);
 
+    // The continuation UTXO's value is what output 0 actually carries: the full covenant value,
+    // minus the permission output when this settlement carved exits. Tracking `cov.value` here
+    // unconditionally made the NEXT settlement build against a wrong input value after any
+    // exits settlement.
+    let continuation_value = settlement.transaction.outputs[0].value;
     BuiltSettlement {
         transaction: settlement.transaction,
         compute_budget,
@@ -172,19 +177,20 @@ pub fn build_settlement(
             new_state: artifact.new_state,
             new_lane_tip: artifact.new_lane_tip,
             continuation_spk,
-            value: cov.value,
+            value: continuation_value,
         },
     }
 }
 
 /// Builds a dev settlement for one proven bundle against the live dev covenant `cov`.
 ///
-/// Panics if the artifact does not chain from `cov` or carries L2-to-L1 exits, which the dev redeem
-/// does not support.
-pub fn build_dev_settlement(
+/// Panics if the artifact does not chain from `cov`. Exits are supported: a non-zero
+/// `permission_spk_hash` produces the two-output layout (continuation + permission exit), the
+/// same as the production redeem.
+pub fn build_dev_settlement<R>(
     lane_key: &Hash,
     cov: &CovenantState,
-    artifact: &SettlementArtifact<Receipt>,
+    artifact: &SettlementArtifact<R>,
 ) -> BuiltSettlement {
     assert_eq!(
         artifact.prev_state, cov.state,
@@ -199,11 +205,6 @@ pub fn build_dev_settlement(
         cov.covenant_id,
         "dev settlement covenant_id must match the live covenant",
     );
-    assert_eq!(
-        artifact.permission_spk_hash, [0u8; 32],
-        "this dev settlement builder does not wire permission exits through the artifact yet",
-    );
-
     let settlement = Settlement::build_dev(&SettlementDevInput {
         deposit_spk_hash: &artifact.deposit_spk_hash,
         covenant_id: cov.covenant_id,
@@ -216,11 +217,14 @@ pub fn build_dev_settlement(
         claimed_seq_commit: artifact.new_seq_commit,
         prev_outpoint: cov.outpoint,
         value: cov.value,
-        permission_spk_hash: &[0u8; 32],
+        permission_spk_hash: &artifact.permission_spk_hash,
         permission_output_value: DEFAULT_PERMISSION_OUTPUT_VALUE,
     });
     let continuation_spk = pay_to_script_hash_script(&settlement.next_redeem);
 
+    // See build_settlement: the continuation carries output 0's actual value, which is
+    // `cov.value - permission_output_value` when this settlement carved exits.
+    let continuation_value = settlement.transaction.outputs[0].value;
     BuiltSettlement {
         transaction: settlement.transaction,
         compute_budget: DEV_COVENANT_BUDGET,
@@ -229,7 +233,7 @@ pub fn build_dev_settlement(
             new_state: artifact.new_state,
             new_lane_tip: artifact.new_lane_tip,
             continuation_spk,
-            value: cov.value,
+            value: continuation_value,
         },
     }
 }

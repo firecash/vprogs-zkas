@@ -26,6 +26,8 @@ use vprogs_shielded_demo_types::{
 };
 use x25519_dalek::{PublicKey, StaticSecret};
 
+mod l1;
+
 fn hash_parts(parts: &[&[u8]]) -> [u8; 32] {
     let mut d = Sha256::new();
     for p in parts {
@@ -416,7 +418,9 @@ fn print_balances(pool: &Pool, actors: &[&Actor]) {
     );
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
+    let with_l1 = std::env::args().any(|a| a == "--l1");
     let real = std::env::args().any(|a| a == "--real");
     if !real && std::env::var("RISC0_DEV_MODE").is_err() {
         std::env::set_var("RISC0_DEV_MODE", "1");
@@ -546,5 +550,12 @@ fn main() {
     let theft = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| prover.prove(&wtheft)));
     println!("   spending with a wrong key:  {}", if theft.is_err() { "REJECTED (spend authority checked in-guest)" } else { "ACCEPTED ?!" });
 
-    println!("\n══ done — pool: {} leaves, {} nullifiers, exits queued: {} ══", pool.leaves.len(), pool.nullifiers.len(), pool.exits.len());
+    println!("\n══ pool done — {} leaves, {} nullifiers, exits queued: {} ══", pool.leaves.len(), pool.nullifiers.len(), pool.exits.len());
+
+    // ── 6. The custody leg: make Bob's exit REAL on a live Kaspa simnet ──
+    if with_l1 {
+        l1::run_custody_leg(pool.root(), l1_addr, 10 * UNIT).await;
+    } else {
+        println!("   (pass --l1 to run the custody leg on a real kaspad simnet: covenant, deposits, settlement, sweep)");
+    }
 }
