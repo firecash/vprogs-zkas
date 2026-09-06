@@ -632,8 +632,11 @@ async fn main() {
     );
 
     // ── 6. The custody leg: make Bob's exit REAL on a live Kaspa simnet ──
+    // The covenant commits the BATCH-PROVEN state, and the exit comes from the batch journal —
+    // the L1 side settles exactly what the aggregate proof vouched for.
     if with_l1 {
-        l1::run_custody_leg(pool.root(), l1_addr, 10 * UNIT).await;
+        let e = bj.exits[0];
+        l1::run_custody_leg(bj.new_state, e.recipient, e.value).await;
     } else {
         println!("   (pass --l1 to run the custody leg on a real kaspad simnet: covenant, deposits, settlement, sweep)");
     }

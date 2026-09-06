@@ -27,3 +27,6 @@ vprogs-zk-backend-risc0-api      = { workspace = true, features = ["host"] }
 vprogs-zk-backend-risc0-settler.workspace = true
 vprogs-zk-backend-risc0-test-suite.workspace = true
 x25519-dalek                     = { version = "2", features = ["static_secrets"] }
+
+[features]
+cuda = ["risc0-zkvm/cuda"]
