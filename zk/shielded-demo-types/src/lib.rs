@@ -409,3 +409,367 @@ mod tests {
         verify_shielded_tx(&mk(MIN_FEE_ZKAS * KAS_FEE_PREMIUM)).expect("premium fee accepted");
     }
 }
+
+// =============================================================================================
+// Batch layer: the aggregate state transition the covenant ultimately verifies.
+// =============================================================================================
+
+/// Depth of the nullifier sparse-Merkle accumulator (one bit per nullifier bit).
+pub const NF_DEPTH: usize = 256;
+
+/// Empty-leaf and member-leaf values of the nullifier accumulator.
+pub fn nf_empty_leaf() -> [u8; 32] {
+    h(&[b"zkasL2.nf.empty"])
+}
+pub fn nf_member_leaf() -> [u8; 32] {
+    h(&[b"zkasL2.nf.member"])
+}
+
+/// Default (all-empty) subtree ladder for the nullifier accumulator: `d[l]` = empty subtree of
+/// height `l`.
+pub fn nf_default_ladder() -> Vec<[u8; 32]> {
+    let mut d = Vec::with_capacity(NF_DEPTH + 1);
+    d.push(nf_empty_leaf());
+    for l in 0..NF_DEPTH {
+        let below = d[l];
+        d.push(node_hash(&below, &below));
+    }
+    d
+}
+
+/// Bit `i` (MSB-first) of a 32-byte value.
+fn nf_bit(nf: &[u8; 32], i: usize) -> bool {
+    (nf[i / 8] >> (7 - (i % 8))) & 1 == 1
+}
+
+/// Fold a leaf value up the nullifier path with the given siblings (level 0 = leaf level).
+fn nf_fold(nf: &[u8; 32], leaf: [u8; 32], siblings: &[[u8; 32]]) -> [u8; 32] {
+    let mut acc = leaf;
+    for l in 0..NF_DEPTH {
+        // The bit that chooses left/right at level l is bit (NF_DEPTH - 1 - l) of the key.
+        let right = nf_bit(nf, NF_DEPTH - 1 - l);
+        acc = if right { node_hash(&siblings[l], &acc) } else { node_hash(&acc, &siblings[l]) };
+    }
+    acc
+}
+
+/// Verify `nf` is NOT in the set with root `root` (its leaf is empty under `siblings`), then
+/// insert it, returning the new root. This is the double-spend gate the batch proof enforces
+/// against ALL history, not just within one batch.
+pub fn nf_verify_and_insert(
+    root: &[u8; 32],
+    nf: &[u8; 32],
+    siblings: &[[u8; 32]],
+) -> Result<[u8; 32], &'static str> {
+    if siblings.len() != NF_DEPTH {
+        return Err("bad nullifier witness length");
+    }
+    if &nf_fold(nf, nf_empty_leaf(), siblings) != root {
+        return Err("nullifier already spent (or stale witness)");
+    }
+    Ok(nf_fold(nf, nf_member_leaf(), siblings))
+}
+
+/// Incremental frontier of the commitment tree: appends in O(depth), root equals the padded
+/// fixed-depth tree over the same leaves.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Frontier {
+    pub count: u64,
+    pub peaks: Vec<[u8; 32]>, // TREE_DEPTH entries; peaks[l] valid when bit l of count is set
+}
+
+impl Default for Frontier {
+    fn default() -> Self {
+        Frontier { count: 0, peaks: vec![[0u8; 32]; TREE_DEPTH] }
+    }
+}
+
+impl Frontier {
+    pub fn push(&mut self, leaf: [u8; 32]) {
+        assert!(self.count < 1 << TREE_DEPTH, "tree full");
+        let mut carry = leaf;
+        for l in 0..TREE_DEPTH {
+            if (self.count >> l) & 1 == 1 {
+                carry = node_hash(&self.peaks[l], &carry);
+            } else {
+                self.peaks[l] = carry;
+                break;
+            }
+        }
+        self.count += 1;
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        let z = zero_ladder();
+        // Fold the right edge: at each level either close a pending peak or pad with zeros.
+        let mut acc = z[0];
+        let mut acc_is_empty = true;
+        for l in 0..TREE_DEPTH {
+            if (self.count >> l) & 1 == 1 {
+                acc = if acc_is_empty { node_hash(&self.peaks[l], &z[l]) } else { node_hash(&self.peaks[l], &acc) };
+                acc_is_empty = false;
+            } else if !acc_is_empty {
+                acc = node_hash(&acc, &z[l]);
+            } else {
+                acc = z[l + 1];
+                // still empty
+            }
+        }
+        if acc_is_empty { z[TREE_DEPTH] } else { acc }
+    }
+}
+
+/// The combined L2 state the covenant tracks: commitment-tree root + nullifier-set root.
+pub fn batch_state(tree_root: &[u8; 32], nf_root: &[u8; 32]) -> [u8; 32] {
+    h(&[b"zkasL2.state", tree_root, nf_root])
+}
+
+/// Per-transaction batch witness: the (already receipt-verified) public journal plus one
+/// accumulator witness per nullifier, captured at its insertion position.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchTxWitness {
+    pub journal: ShieldedTxJournal,
+    pub nf_siblings: Vec<Vec<[u8; 32]>>,
+}
+
+/// The full batch witness.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BatchWitness {
+    /// Image id of the spend guest whose receipts vouch for the journals; committed to the
+    /// batch journal so the verifier pins it.
+    pub inner_image_id: [u8; 32],
+    pub prev_frontier: Frontier,
+    pub prev_nf_root: [u8; 32],
+    /// Deposit commitments credited from L1 in this batch (appended before any transfer).
+    pub deposits: Vec<[u8; 32]>,
+    pub txs: Vec<BatchTxWitness>,
+}
+
+/// The batch's public journal — what the settlement covenant binds.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BatchJournal {
+    pub inner_image_id: [u8; 32],
+    pub prev_state: [u8; 32],
+    pub new_state: [u8; 32],
+    pub deposits_hash: [u8; 32],
+    /// All exits this batch owes, in order — the settler builds the permission tree from these.
+    pub exits: Vec<ExitDecl>,
+    /// Fees claimable by the batch poster, per asset [KAS, ZKAS].
+    pub fees: [u64; 2],
+    pub tx_count: u32,
+}
+
+fn hash_cm_list(cms: &[[u8; 32]]) -> [u8; 32] {
+    let mut d = Sha256::new();
+    d.update(b"zkasL2.deposits");
+    d.update((cms.len() as u32).to_le_bytes());
+    for cm in cms {
+        d.update(cm);
+    }
+    d.finalize().into()
+}
+
+/// Apply a whole batch to the L2 state, verifying every rule EXCEPT the receipts themselves
+/// (the guest adds `env::verify` per journal; the host has verified receipts out-of-band).
+///
+/// Rules: every tx anchor must be a rolling root of THIS batch's history (the previous settled
+/// root, or any intermediate root after deposits/earlier txs); every nullifier proves
+/// non-membership against the accumulator and is inserted (history-wide double-spend gate);
+/// commitments append in order; fees and exits accumulate.
+pub fn verify_batch(w: &BatchWitness) -> Result<BatchJournal, &'static str> {
+    let mut frontier = w.prev_frontier.clone();
+    let prev_state = batch_state(&frontier.root(), &w.prev_nf_root);
+    let mut nf_root = w.prev_nf_root;
+    let mut roots_seen = vec![frontier.root()];
+
+    for cm in &w.deposits {
+        frontier.push(*cm);
+    }
+    roots_seen.push(frontier.root());
+
+    let mut fees = [0u64; 2];
+    let mut exits = Vec::new();
+    for tx in &w.txs {
+        let j = &tx.journal;
+        if !roots_seen.contains(&j.anchor) {
+            return Err("tx anchor is not a rolling root of this batch");
+        }
+        if j.nullifiers.len() != tx.nf_siblings.len() {
+            return Err("one accumulator witness per nullifier");
+        }
+        for (nf, sib) in j.nullifiers.iter().zip(&tx.nf_siblings) {
+            nf_root = nf_verify_and_insert(&nf_root, nf, sib)?;
+        }
+        for cm in &j.new_cms {
+            frontier.push(*cm);
+        }
+        roots_seen.push(frontier.root());
+        if j.fee_asset as usize > 1 {
+            return Err("unknown fee asset");
+        }
+        fees[j.fee_asset as usize] =
+            fees[j.fee_asset as usize].checked_add(j.fee_amount).ok_or("fee overflow")?;
+        if let Some(e) = j.exit {
+            exits.push(e);
+        }
+    }
+
+    Ok(BatchJournal {
+        inner_image_id: w.inner_image_id,
+        prev_state,
+        new_state: batch_state(&frontier.root(), &nf_root),
+        deposits_hash: hash_cm_list(&w.deposits),
+        exits,
+        fees,
+        tx_count: w.txs.len() as u32,
+    })
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+
+    #[test]
+    fn frontier_root_matches_padded_tree() {
+        // The padded fixed-depth tree, computed the flat way.
+        fn flat_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+            let z = zero_ladder();
+            let mut level = leaves.to_vec();
+            for d in 0..TREE_DEPTH {
+                if level.is_empty() {
+                    return z[TREE_DEPTH];
+                }
+                let mut next = Vec::new();
+                for pair in level.chunks(2) {
+                    next.push(node_hash(&pair[0], pair.get(1).unwrap_or(&z[d])));
+                }
+                level = next;
+            }
+            level[0]
+        }
+        let mut f = Frontier::default();
+        let mut leaves = Vec::new();
+        assert_eq!(f.root(), flat_root(&leaves), "empty");
+        for i in 0..40u64 {
+            let leaf = h(&[b"leaf", &i.to_le_bytes()]);
+            f.push(leaf);
+            leaves.push(leaf);
+            assert_eq!(f.root(), flat_root(&leaves), "after {} appends", i + 1);
+        }
+    }
+
+    #[test]
+    fn nullifier_accumulator_rejects_replay() {
+        // Host-side sparse set mirroring the accumulator.
+        let ladder = nf_default_ladder();
+        let mut nodes: std::collections::HashMap<(usize, Vec<u8>), [u8; 32]> =
+            std::collections::HashMap::new();
+        let mut root = ladder[NF_DEPTH];
+
+        // Prefix of the first (NF_DEPTH - level) bits, byte-packed.
+        fn prefix(nf: &[u8; 32], bits: usize) -> Vec<u8> {
+            let mut p = nf[..bits.div_ceil(8)].to_vec();
+            if bits % 8 != 0 {
+                let last = p.len() - 1;
+                p[last] &= 0xFFu8 << (8 - bits % 8);
+            }
+            p
+        }
+        fn get(
+            nodes: &std::collections::HashMap<(usize, Vec<u8>), [u8; 32]>,
+            ladder: &[[u8; 32]],
+            level: usize,
+            pfx: Vec<u8>,
+        ) -> [u8; 32] {
+            *nodes.get(&(level, pfx)).unwrap_or(&ladder[level])
+        }
+        let mut insert = |nf: &[u8; 32],
+                          nodes: &mut std::collections::HashMap<(usize, Vec<u8>), [u8; 32]>,
+                          root: &mut [u8; 32]|
+         -> Result<Vec<[u8; 32]>, &'static str> {
+            // Collect siblings bottom-up.
+            let mut sibs = Vec::with_capacity(NF_DEPTH);
+            for l in 0..NF_DEPTH {
+                let bits = NF_DEPTH - l;
+                let mut sib_key = *nf;
+                // flip bit (bits-1)
+                sib_key[(bits - 1) / 8] ^= 1 << (7 - ((bits - 1) % 8));
+                sibs.push(get(nodes, &ladder, l, prefix(&sib_key, bits)));
+            }
+            let new_root = nf_verify_and_insert(root, nf, &sibs)?;
+            // Write the member path.
+            let mut acc = nf_member_leaf();
+            nodes.insert((0, prefix(nf, NF_DEPTH)), acc);
+            for l in 0..NF_DEPTH - 1 {
+                let bits = NF_DEPTH - l;
+                let right = nf_bit(nf, bits - 1);
+                acc = if right { node_hash(&sibs[l], &acc) } else { node_hash(&acc, &sibs[l]) };
+                nodes.insert((l + 1, prefix(nf, bits - 1)), acc);
+            }
+            *root = new_root;
+            Ok(sibs)
+        };
+
+        let a = h(&[b"nf-a"]);
+        let b = h(&[b"nf-b"]);
+        insert(&a, &mut nodes, &mut root).expect("first insert");
+        insert(&b, &mut nodes, &mut root).expect("second insert");
+        assert_eq!(
+            insert(&a, &mut nodes, &mut root).unwrap_err(),
+            "nullifier already spent (or stale witness)",
+            "replaying a across batches must fail"
+        );
+    }
+}
+
+/// Host-side sparse nullifier set mirroring the in-proof accumulator: produces, for each insert,
+/// the sibling witness the guest verifies. (An L2 node keeps one of these per pool.)
+#[derive(Clone, Debug, Default)]
+pub struct SparseNfSet {
+    nodes: std::collections::HashMap<(usize, Vec<u8>), [u8; 32]>,
+    root: Option<[u8; 32]>,
+}
+
+impl SparseNfSet {
+    fn prefix(nf: &[u8; 32], bits: usize) -> Vec<u8> {
+        let mut p = nf[..bits.div_ceil(8)].to_vec();
+        if bits % 8 != 0 {
+            let last = p.len() - 1;
+            p[last] &= 0xFFu8 << (8 - bits % 8);
+        }
+        p
+    }
+
+    pub fn root(&self) -> [u8; 32] {
+        self.root.unwrap_or_else(|| nf_default_ladder()[NF_DEPTH])
+    }
+
+    /// Insert `nf`, returning the sibling witness valid for the accumulator state BEFORE the
+    /// insert. Errors on a replay.
+    pub fn insert(&mut self, nf: &[u8; 32]) -> Result<Vec<[u8; 32]>, &'static str> {
+        let ladder = nf_default_ladder();
+        let mut sibs = Vec::with_capacity(NF_DEPTH);
+        for l in 0..NF_DEPTH {
+            let bits = NF_DEPTH - l;
+            let mut sib_key = *nf;
+            sib_key[(bits - 1) / 8] ^= 1 << (7 - ((bits - 1) % 8));
+            let pfx = Self::prefix(&sib_key, bits);
+            sibs.push(*self.nodes.get(&(l, pfx)).unwrap_or(&ladder[l]));
+        }
+        let root = self.root();
+        let new_root = nf_verify_and_insert(&root, nf, &sibs)?;
+        let mut acc = nf_member_leaf();
+        self.nodes.insert((0, Self::prefix(nf, NF_DEPTH)), acc);
+        for l in 0..NF_DEPTH - 1 {
+            let bits = NF_DEPTH - l;
+            let right = {
+                let i = bits - 1;
+                (nf[i / 8] >> (7 - (i % 8))) & 1 == 1
+            };
+            acc = if right { node_hash(&sibs[l], &acc) } else { node_hash(&acc, &sibs[l]) };
+            self.nodes.insert((l + 1, Self::prefix(nf, bits - 1)), acc);
+        }
+        self.root = Some(new_root);
+        Ok(sibs)
+    }
+}

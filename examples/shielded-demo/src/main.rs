@@ -20,9 +20,10 @@ use risc0_zkvm::{default_prover, ExecutorEnv};
 use std::collections::HashSet;
 use vprogs_shielded_demo_types::sha2::{Digest, Sha256};
 use vprogs_shielded_demo_types::{
-    addr_from_sk, deposit_rho, nk_from_sk, node_hash, note_cm, nullifier, output_rho,
-    zero_ladder, ExitDecl, Note, ShieldedTxJournal, ShieldedTxWitness, SpendWitness, ASSET_KAS,
-    ASSET_ZKAS, KAS_FEE_PREMIUM, MIN_FEE_ZKAS, TREE_DEPTH,
+    addr_from_sk, batch_state, deposit_rho, nf_default_ladder, nk_from_sk, node_hash, note_cm,
+    nullifier, output_rho, verify_batch, zero_ladder, BatchTxWitness, BatchWitness, ExitDecl,
+    Frontier, Note, ShieldedTxJournal, ShieldedTxWitness, SparseNfSet, SpendWitness, ASSET_KAS,
+    ASSET_ZKAS, KAS_FEE_PREMIUM, MIN_FEE_ZKAS, NF_DEPTH, TREE_DEPTH,
 };
 use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -143,6 +144,13 @@ fn try_decrypt(actor: &Actor, ct: &[u8]) -> Option<Note> {
 struct Pool {
     zeros: [[u8; 32]; TREE_DEPTH + 1],
     leaves: Vec<[u8; 32]>,
+    /// Frontier mirror of `leaves` (the batch witness state representation).
+    frontier: Frontier,
+    /// History-wide nullifier accumulator (per-insert witnesses feed the batch proof).
+    nf_acc: SparseNfSet,
+    /// Batch under construction: deposits + receipt-backed tx witnesses.
+    batch_deposits: Vec<[u8; 32]>,
+    batch_txs: Vec<BatchTxWitness>,
     /// Every historical root (demo stand-in for the settled-anchor window).
     roots: HashSet<[u8; 32]>,
     nullifiers: HashSet<[u8; 32]>,
@@ -158,6 +166,10 @@ impl Pool {
         let mut p = Pool {
             zeros,
             leaves: Vec::new(),
+            frontier: Frontier::default(),
+            nf_acc: SparseNfSet::default(),
+            batch_deposits: Vec::new(),
+            batch_txs: Vec::new(),
             roots: HashSet::new(),
             nullifiers: HashSet::new(),
             ledger: Vec::new(),
@@ -207,6 +219,7 @@ impl Pool {
     fn add_leaf(&mut self, cm: [u8; 32], ciphertext: Vec<u8>) -> u32 {
         let idx = self.leaves.len() as u32;
         self.leaves.push(cm);
+        self.frontier.push(cm);
         self.ledger.push((idx, ciphertext));
         let r = self.root();
         self.roots.insert(r);
@@ -216,9 +229,12 @@ impl Pool {
     /// Apply a VERIFIED journal — the rollup node's state transition.
     fn apply(&mut self, j: &ShieldedTxJournal, ciphertexts: Vec<Vec<u8>>) {
         assert!(self.roots.contains(&j.anchor), "unknown anchor");
+        let mut nf_siblings = Vec::with_capacity(j.nullifiers.len());
         for nf in &j.nullifiers {
             assert!(self.nullifiers.insert(*nf), "double spend");
+            nf_siblings.push(self.nf_acc.insert(nf).expect("accumulator replay"));
         }
+        self.batch_txs.push(BatchTxWitness { journal: j.clone(), nf_siblings });
         for (cm, ct) in j.new_cms.iter().zip(ciphertexts) {
             self.add_leaf(*cm, ct);
         }
@@ -281,12 +297,23 @@ impl GuestProver {
         GuestProver { elf, image_id }
     }
 
-    fn prove(&self, w: &ShieldedTxWitness) -> (ShieldedTxJournal, u64) {
+    fn prove(&self, w: &ShieldedTxWitness) -> (ShieldedTxJournal, u64, risc0_zkvm::Receipt) {
         let env = ExecutorEnv::builder().write(w).expect("ser").build().expect("env");
         let info = default_prover().prove(env, &self.elf).expect("proving failed");
         info.receipt.verify(self.image_id).expect("receipt does not verify");
         let journal: ShieldedTxJournal = info.receipt.journal.decode().expect("journal");
-        (journal, info.stats.total_cycles)
+        (journal, info.stats.total_cycles, info.receipt)
+    }
+
+    fn load_at(env_var: &str, rel: &str) -> Self {
+        let path = std::env::var(env_var)
+            .unwrap_or_else(|_| format!("{}/{rel}", env!("CARGO_MANIFEST_DIR")));
+        let raw = std::fs::read(&path)
+            .unwrap_or_else(|e| panic!("cannot read guest ELF at {path}: {e}"));
+        let binary = risc0_binfmt::ProgramBinary::new(&raw, risc0_zkos_v1compat::V1COMPAT_ELF);
+        let image_id = binary.compute_image_id().expect("image id");
+        let elf = binary.encode();
+        GuestProver { elf, image_id }
     }
 }
 
@@ -439,6 +466,7 @@ async fn main() {
     let charlie = Actor::new("Charlie");
     let actors = [&alice, &bob, &charlie];
     let mut pool = Pool::new();
+    let mut receipts: Vec<risc0_zkvm::Receipt> = Vec::new();
 
     // ── 1. Edges: deposits (amount public, recipient hidden from block one) ──
     println!("\n■ step 1 — deposits (the transparent edge)");
@@ -453,6 +481,7 @@ async fn main() {
         rand::thread_rng().fill_bytes(&mut rseed);
         let note = Note { asset, value: amount, pk: who.pk(), rho: deposit_rho(&fake_txid, 0), rseed };
         let ct = encrypt_note(&note, &who.enc_pk());
+        pool.batch_deposits.push(note_cm(&note));
         let leaf = pool.add_leaf(note_cm(&note), ct);
         println!("   {tag}: L1 sees amount {} {} → commitment {} (leaf {leaf}); the owner is hidden", fmt_amt(amount), asset_name(asset), short(&note_cm(&note)));
     }
@@ -468,7 +497,8 @@ async fn main() {
         MIN_FEE_ZKAS,
         None,
     );
-    let (j, cycles) = prover.prove(&w);
+    let (j, cycles, r) = prover.prove(&w);
+    receipts.push(r);
     pool.apply(&j, cts.clone());
     print_observer_view("Alice→Bob", &j, &cts, cycles);
     let bob_found = pool.scan(&bob);
@@ -489,7 +519,8 @@ async fn main() {
         kas_fee,
         None,
     );
-    let (j, cycles) = prover.prove(&w);
+    let (j, cycles, r) = prover.prove(&w);
+    receipts.push(r);
     pool.apply(&j, cts.clone());
     print_observer_view("Charlie→Alice", &j, &cts, cycles);
     print_balances(&pool, &actors);
@@ -506,7 +537,8 @@ async fn main() {
         kas_fee,
         Some(ExitDecl { asset: ASSET_KAS, value: 10 * UNIT, recipient: l1_addr }),
     );
-    let (j, cycles) = prover.prove(&w);
+    let (j, cycles, r) = prover.prove(&w);
+    receipts.push(r);
     pool.apply(&j, cts.clone());
     print_observer_view("Bob exit", &j, &cts, cycles);
     println!("     → settlement: the covenant's next advance carves a permission output of {} KAS to {}", fmt_amt(10 * UNIT), short(&l1_addr));
@@ -551,6 +583,53 @@ async fn main() {
     println!("   spending with a wrong key:  {}", if theft.is_err() { "REJECTED (spend authority checked in-guest)" } else { "ACCEPTED ?!" });
 
     println!("\n══ pool done — {} leaves, {} nullifiers, exits queued: {} ══", pool.leaves.len(), pool.nullifiers.len(), pool.exits.len());
+
+    // ── 5b. THE AGGREGATE PROOF: one recursion proof vouching for the whole batch ──
+    println!("\n■ batch aggregation — recursively verify {} spend receipts + prove the state transition", receipts.len());
+    let batch_prover = GuestProver::load_at(
+        "SHIELDED_BATCH_ELF",
+        "../../zk/backend/risc0/shielded-batch/compiled/program.elf",
+    );
+    println!("   batch guest image id: {}", batch_prover.image_id);
+    let batch_witness = BatchWitness {
+        inner_image_id: prover.image_id.into(),
+        prev_frontier: Frontier::default(),
+        prev_nf_root: nf_default_ladder()[NF_DEPTH],
+        deposits: pool.batch_deposits.clone(),
+        txs: pool.batch_txs.clone(),
+    };
+    // Host-side dry run first: the guest runs the identical function.
+    let expected = verify_batch(&batch_witness).expect("host batch check");
+    assert_eq!(
+        expected.new_state,
+        batch_state(&pool.frontier.root(), &pool.nf_acc.root()),
+        "host state must equal the batch's proven successor"
+    );
+    let mut env = ExecutorEnv::builder();
+    env.write(&batch_witness).expect("ser");
+    for r in &receipts {
+        env.add_assumption(r.clone());
+    }
+    let env = env.build().expect("env");
+    let info = default_prover().prove(env, &batch_prover.elf).expect("batch proving failed");
+    info.receipt.verify(batch_prover.image_id).expect("batch receipt must verify");
+    let bj: vprogs_shielded_demo_types::BatchJournal =
+        info.receipt.journal.decode().expect("batch journal");
+    assert_eq!(bj, expected, "guest and host must derive the identical batch journal");
+    println!(
+        "   ✔ ONE proof covers {} deposits + {} private txs: state {} → {} ({} cycles)",
+        pool.batch_deposits.len(),
+        bj.tx_count,
+        short(&bj.prev_state),
+        short(&bj.new_state),
+        info.stats.total_cycles
+    );
+    println!(
+        "   journal exposes only: state roots, {} exit(s), fees [{} KAS, {} ZKAS], inner image id",
+        bj.exits.len(),
+        fmt_amt(bj.fees[0]),
+        fmt_amt(bj.fees[1])
+    );
 
     // ── 6. The custody leg: make Bob's exit REAL on a live Kaspa simnet ──
     if with_l1 {

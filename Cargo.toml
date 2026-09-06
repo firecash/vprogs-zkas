@@ -28,6 +28,7 @@ exclude = [
   "zk/backend/risc0/runtime-processor",
   "zk/backend/risc0/zkas-burn-processor",
   "zk/backend/risc0/shielded-pool",
+  "zk/backend/risc0/shielded-batch",
 ]
 members = [
   "core/*",

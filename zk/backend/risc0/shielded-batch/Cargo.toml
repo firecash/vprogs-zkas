@@ -1,0 +1,18 @@
+[package]
+edition = "2021"
+name    = "vprogs-zk-backend-risc0-shielded-batch"
+version = "0.1.0"
+
+# Shielded-pool batch aggregator: recursively verifies N client spend receipts and proves the
+# aggregate L2 state transition (commitment-tree frontier + nullifier accumulator) in one shot —
+# the single proof a settlement covenant verifies on-chain.
+
+[dependencies]
+risc0-zkvm = { version = "3.0", default-features = false, features = ["std"] }
+vprogs-shielded-demo-types = { path = "../../../shielded-demo-types" }
+
+[profile.release]
+lto       = true
+opt-level = 3
+
+[workspace]
